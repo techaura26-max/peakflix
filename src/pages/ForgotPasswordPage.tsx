@@ -1,20 +1,7 @@
 import { KeyRound, Mail, Search, ShieldCheck } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { forgotPassword, resetPassword, verifySecurityAnswer } from '../services/authApi';
-
-const SECURITY_QUESTIONS: Record<number, string> = {
-  1: 'What was the name of your first pet?',
-  2: 'What city were you born in?',
-  3: 'What was the name of your first school?',
-  4: 'What is your favorite movie?',
-  5: 'What is your favorite childhood memory?',
-  6: 'What was your childhood nickname?',
-  7: 'What is the name of your favorite teacher?',
-  8: 'What is your favorite food?',
-  9: 'What was your first car model?',
-  10: 'What is your favorite book?',
-};
+import { forgotPassword, getSecurityQuestions, resetPassword, verifySecurityAnswer } from '../services/authApi';
 
 export function ForgotPasswordPage() {
   const [identifier, setIdentifier] = useState('');
@@ -27,6 +14,16 @@ export function ForgotPasswordPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [questions, setQuestions] = useState<Array<{ id: number; question: string }>>([]);
+
+  useEffect(() => {
+    getSecurityQuestions().then((result) => {
+      if (Array.isArray(result.items) && result.items.length) {
+        const nextQuestions = (result.items as Array<{ id: number; question: string }>);
+        setQuestions(nextQuestions);
+      }
+    }).catch(() => undefined);
+  }, []);
 
   const recover = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -103,7 +100,7 @@ export function ForgotPasswordPage() {
           <>
             <label>
               <span>Security question</span>
-              <div><ShieldCheck size={18} /><input value={SECURITY_QUESTIONS[questionId] || ''} readOnly /></div>
+              <div><ShieldCheck size={18} /><input value={questions.find((item) => item.id === questionId)?.question || ''} readOnly /></div>
             </label>
             <label>
               <span>Security answer</span>

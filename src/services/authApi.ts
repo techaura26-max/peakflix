@@ -1,6 +1,7 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
-interface AuthResponse { ok: boolean; token?: string; user?: any; error?: string; details?: unknown; valid?: boolean; items?: string[]; message?: string }
+interface SecurityQuestion { id: number; question: string }
+interface AuthResponse { ok: boolean; token?: string; user?: any; error?: string; details?: unknown; valid?: boolean; items?: SecurityQuestion[] | string[]; message?: string }
 
 async function request<T = AuthResponse>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -16,6 +17,10 @@ async function request<T = AuthResponse>(path: string, options: RequestInit = {}
 
 export async function signUp(payload: Record<string, unknown>) {
   return request('/auth/signup', { method: 'POST', body: JSON.stringify(payload) });
+}
+
+export async function getSecurityQuestions() {
+  return request('/auth/security-questions', { method: 'GET' });
 }
 
 export async function signIn(payload: Record<string, unknown>) {

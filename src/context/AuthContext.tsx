@@ -2,6 +2,15 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import { getProfile, signIn, syncLibrary } from '../services/authApi';
 import { getLibrary } from '../utils/library';
 
+function readStoredAuth() {
+  try {
+    const raw = localStorage.getItem('peakflix-user');
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
 interface AuthValue {
   user: string | null;
   login: (identifier: string, password: string) => Promise<boolean>;

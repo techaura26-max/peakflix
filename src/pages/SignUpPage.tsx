@@ -1,22 +1,10 @@
 import { LockKeyhole, Mail, MapPin, User, HelpCircle, Sparkles } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, Link } from 'react-router-dom';
-import { signUp } from '../services/authApi';
+import { getSecurityQuestions, signUp } from '../services/authApi';
 import { useAuth } from '../context/AuthContext';
-
-const SECURITY_QUESTIONS = [
-  { id: 1, label: 'What was the name of your first pet?' },
-  { id: 2, label: 'What city were you born in?' },
-  { id: 3, label: 'What was the name of your first school?' },
-  { id: 4, label: 'What is your favorite movie?' },
-  { id: 5, label: 'What is your favorite childhood memory?' },
-  { id: 6, label: 'What was your childhood nickname?' },
-  { id: 7, label: 'What is the name of your favorite teacher?' },
-  { id: 8, label: 'What is your favorite food?' },
-  { id: 9, label: 'What was your first car model?' },
-  { id: 10, label: 'What is your favorite book?' },
-];
+import { COUNTRIES } from '../data/countries';
 
 export function SignUpPage() {
   const { t } = useTranslation();
@@ -27,10 +15,18 @@ export function SignUpPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [query, setQuery] = useState('');
+  const [questions, setQuestions] = useState<Array<{ id: number; question: string }>>([]);
 
-  const countries = useMemo(() => [
-    'United States', 'United Kingdom', 'Canada', 'Australia', 'India', 'Germany', 'France', 'Spain', 'Italy', 'Japan', 'Brazil', 'Mexico', 'Turkey', 'Egypt', 'South Africa', 'Saudi Arabia', 'United Arab Emirates', 'Nigeria', 'Kenya', 'Netherlands', 'Sweden', 'Norway', 'Finland', 'Poland', 'Argentina', 'Chile', 'Peru', 'Colombia', 'Indonesia', 'Malaysia', 'Philippines', 'Singapore', 'New Zealand', 'Pakistan', 'Bangladesh', 'Sri Lanka', 'Thailand', 'Vietnam', 'South Korea', 'China', 'Russia', 'Ukraine', 'Romania', 'Greece', 'Portugal', 'Ireland', 'Belgium', 'Austria', 'Czech Republic', 'Hungary', 'Slovakia', 'Denmark', 'Israel', 'Morocco', 'Algeria', 'Tunisia', 'Jordan', 'Lebanon', 'Iraq', 'Qatar', 'Oman', 'Kuwait', 'Bahrain', 'Zimbabwe', 'Botswana', 'Ghana', 'Tanzania', 'Nepal', 'Cambodia', 'Laos', 'Myanmar', 'Mongolia', 'Kazakhstan', 'Uzbekistan', 'Azerbaijan', 'Armenia', 'Georgia', 'Serbia', 'Croatia', 'Slovenia', 'Bosnia and Herzegovina', 'Albania', 'North Macedonia', 'Malta', 'Cyprus', 'Luxembourg', 'Iceland'
-  ].filter((country) => country.toLowerCase().includes(query.toLowerCase()) || !query), []);
+  useEffect(() => {
+    getSecurityQuestions().then((result) => {
+      if (Array.isArray(result.items) && result.items.length) {
+        const nextQuestions = (result.items as Array<{ id: number; question: string }>);
+        setQuestions(nextQuestions);
+      }
+    }).catch(() => undefined);
+  }, []);
+
+  const countries = useMemo(() => COUNTRIES.filter((country) => country.toLowerCase().includes(query.toLowerCase()) || !query), [query]);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -89,7 +85,7 @@ export function SignUpPage() {
         <label>
           <span>Security Question</span>
           <div><HelpCircle size={18} /><select value={form.securityQuestionId} onChange={(e) => setForm({ ...form, securityQuestionId: e.target.value })}>
-            {SECURITY_QUESTIONS.map((question) => <option key={question.id} value={question.id}>{question.label}</option>)}
+            {questions.length ? questions.map((question) => <option key={question.id} value={question.id}>{question.question}</option>) : <option value="1">What was the name of your first pet?</option>}
           </select></div>
         </label>
         <label>
