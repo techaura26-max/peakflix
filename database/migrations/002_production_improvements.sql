@@ -22,7 +22,7 @@ declare
   username_conflicts text;
   email_conflicts text;
 begin
-  select string_agg(format('%s (%s)', lower(trim(username)), cnt), ', ')
+  select string_agg(format('%s (%s)', normalized_username, cnt), ', ')
     into username_conflicts
   from (
     select lower(trim(username)) as normalized_username, count(*) as cnt
@@ -36,7 +36,7 @@ begin
     raise exception 'Cannot create case-insensitive username uniqueness because duplicate usernames exist: %', username_conflicts;
   end if;
 
-  select string_agg(format('%s (%s)', lower(trim(email)), cnt), ', ')
+  select string_agg(format('%s (%s)', normalized_email, cnt), ', ')
     into email_conflicts
   from (
     select lower(trim(email)) as normalized_email, count(*) as cnt
@@ -73,7 +73,7 @@ insert into security_questions (id, question) values
   (8, 'What was the model of your first car?'),
   (9, 'What is your favorite book?'),
   (10, 'What was the name of the street where you grew up?')
-on conflict (id) do nothing;
+on conflict (question) do update set is_active = excluded.is_active;
 
 do $$
 begin
@@ -89,8 +89,12 @@ begin
     left join security_questions sq on sq.id = u.security_question_id
     where u.security_question_id is not null and sq.id is null
   ) then
-    raise notice 'Skipping foreign key creation because some users reference unknown security_question_id values.';
-    return;
+    raise exception 'Cannot create users.security_question_id foreign key because invalid security question IDs exist: %', (
+      select string_agg(distinct u.security_question_id::text, ', ')
+      from users u
+      left join security_questions sq on sq.id = u.security_question_id
+      where u.security_question_id is not null and sq.id is null
+    );
   end if;
 
   if not exists (
@@ -110,21 +114,6 @@ begin
   return new;
 end;
 $$ language plpgsql;
-
-drop trigger if exists users_set_updated_at on users;
-create trigger users_set_updated_at
-before update on users
-for each row execute function set_updated_at();
-
-drop trigger if exists watch_history_set_updated_at on watch_history;
-create trigger watch_history_set_updated_at
-before update on watch_history
-for each row execute function set_updated_at();
-
-drop trigger if exists movie_lists_set_updated_at on movie_lists;
-create trigger movie_lists_set_updated_at
-before update on movie_lists
-for each row execute function set_updated_at();
 
 -- Watch history upgrades
 alter table watch_history add column if not exists media_type varchar(10) not null default 'movie';
@@ -183,6 +172,21 @@ where id in (select id from ranked where rn > 1);
 create unique index if not exists watch_history_logical_key_uidx
 on watch_history (user_id, media_type, movie_id, coalesce(season_number, 0), coalesce(episode_number, 0));
 
+drop trigger if exists users_set_updated_at on users;
+create trigger users_set_updated_at
+before update on users
+for each row execute function set_updated_at();
+
+drop trigger if exists watch_history_set_updated_at on watch_history;
+create trigger watch_history_set_updated_at
+before update on watch_history
+for each row execute function set_updated_at();
+
+drop trigger if exists movie_lists_set_updated_at on movie_lists;
+create trigger movie_lists_set_updated_at
+before update on movie_lists
+for each row execute function set_updated_at();
+
 -- Favorites upgrades
 alter table favorites add column if not exists media_type varchar(10) not null default 'movie';
 update favorites set media_type = 'movie' where media_type is null or media_type = '';
@@ -217,7 +221,7 @@ do $$
 declare
   duplicate_lists text;
 begin
-  select string_agg(format('%s (%s)', lower(trim(name)), cnt), ', ')
+  select string_agg(format('%s (%s)', normalized_name, cnt), ', ')
     into duplicate_lists
   from (
     select user_id, lower(trim(name)) as normalized_name, count(*) as cnt
