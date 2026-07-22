@@ -6,9 +6,20 @@ export function normalizeUsername(value) {
   return String(value || '').trim();
 }
 
+export function normalizeSecurityAnswer(value) {
+  return String(value || '').trim();
+}
+
 export function normalizeSearchText(value) {
   const trimmed = String(value || '').trim();
   return trimmed;
+}
+
+export function normalizeMediaType(value) {
+  const normalized = String(value ?? 'movie').trim().toLowerCase();
+  if (normalized === 'movie') return 'movie';
+  if (normalized === 'series' || normalized === 'tv' || normalized === 'anime' || normalized === 'turkish-drama' || normalized === 'turkish-series') return 'tv';
+  return null;
 }
 
 export function validatePassword(password) {

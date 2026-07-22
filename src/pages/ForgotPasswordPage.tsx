@@ -6,7 +6,8 @@ import { forgotPassword, getSecurityQuestions, resetPassword, verifySecurityAnsw
 export function ForgotPasswordPage() {
   const [identifier, setIdentifier] = useState('');
   const [step, setStep] = useState<'identify' | 'answer' | 'reset'>('identify');
-  const [userId, setUserId] = useState('');
+  const [recoveryToken, setRecoveryToken] = useState('');
+  const [passwordResetToken, setPasswordResetToken] = useState('');
   const [questionId, setQuestionId] = useState<number | null>(null);
   const [answer, setAnswer] = useState('');
   const [password, setPassword] = useState('');
@@ -25,16 +26,29 @@ export function ForgotPasswordPage() {
     }).catch(() => undefined);
   }, []);
 
+  const resetRecoveryState = () => {
+    setRecoveryToken('');
+    setPasswordResetToken('');
+    setQuestionId(null);
+    setAnswer('');
+    setPassword('');
+    setConfirmPassword('');
+    setStep('identify');
+  };
+
   const recover = async (event: React.FormEvent) => {
     event.preventDefault();
     setLoading(true);
     setError('');
     try {
       const result = await forgotPassword(identifier);
-      if (result.user?.security_question_id) {
-        setUserId(result.user.id);
+      if (result.user?.security_question_id && result.recoveryToken) {
+        setRecoveryToken(result.recoveryToken);
         setQuestionId(result.user.security_question_id);
         setStep('answer');
+      } else {
+        setSuccess('If that account exists, recovery details will be provided.');
+        setStep('identify');
       }
     } catch (e: any) {
       setError(e.message || 'Unable to recover account.');
@@ -48,11 +62,16 @@ export function ForgotPasswordPage() {
     setLoading(true);
     setError('');
     try {
-      const result = await verifySecurityAnswer(userId, answer);
-      if (result.valid) setStep('reset');
-      else setError('The security answer did not match.');
+      const result = await verifySecurityAnswer(recoveryToken, answer);
+      if (result.passwordResetToken) {
+        setPasswordResetToken(result.passwordResetToken);
+        setStep('reset');
+      } else {
+        setError('The security answer did not match.');
+      }
     } catch (e: any) {
-      setError(e.message || 'Unable to verify answer.');
+      setError(e.message || 'Your recovery session has expired.');
+      resetRecoveryState();
     } finally {
       setLoading(false);
     }
@@ -68,15 +87,13 @@ export function ForgotPasswordPage() {
       return;
     }
     try {
-      await resetPassword(userId, password);
+      await resetPassword(passwordResetToken, password, confirmPassword);
       setSuccess('Password updated. You can sign in with your new password.');
-      setStep('identify');
+      resetRecoveryState();
       setIdentifier('');
-      setAnswer('');
-      setPassword('');
-      setConfirmPassword('');
     } catch (e: any) {
       setError(e.message || 'Unable to reset password.');
+      resetRecoveryState();
     } finally {
       setLoading(false);
     }

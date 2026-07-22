@@ -9,7 +9,7 @@ import { COUNTRIES } from '../data/countries';
 export function SignUpPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { login } = useAuth();
+  const { signup } = useAuth();
   const [form, setForm] = useState({ username: '', email: '', password: '', confirmPassword: '', country: '', securityQuestionId: '1', securityAnswer: '', language: 'en' });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -35,12 +35,10 @@ export function SignUpPage() {
     setSuccess('');
 
     try {
-      await signUp({ ...form, country: form.country || query });
-      const ok = await login(form.username, form.password);
-      if (ok) {
-        setSuccess('Account created successfully.');
-        navigate('/');
-      }
+      const response = await signUp({ ...form, country: form.country || query });
+      signup(response.user || null);
+      setSuccess('Account created successfully.');
+      navigate('/');
     } catch (e: any) {
       setError(e.message || 'Signup failed.');
     } finally {

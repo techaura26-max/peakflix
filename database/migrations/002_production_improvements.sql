@@ -182,11 +182,6 @@ create trigger watch_history_set_updated_at
 before update on watch_history
 for each row execute function set_updated_at();
 
-drop trigger if exists movie_lists_set_updated_at on movie_lists;
-create trigger movie_lists_set_updated_at
-before update on movie_lists
-for each row execute function set_updated_at();
-
 -- Favorites upgrades
 alter table favorites add column if not exists media_type varchar(10) not null default 'movie';
 update favorites set media_type = 'movie' where media_type is null or media_type = '';
@@ -215,6 +210,11 @@ create index if not exists favorites_user_created_at_idx on favorites (user_id, 
 
 -- Lists upgrades
 alter table movie_lists add column if not exists updated_at timestamptz not null default now();
+
+drop trigger if exists movie_lists_set_updated_at on movie_lists;
+create trigger movie_lists_set_updated_at
+before update on movie_lists
+for each row execute function set_updated_at();
 
 -- Detect case-insensitive duplicate list names before creating a unique index.
 do $$

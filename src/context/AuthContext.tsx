@@ -2,10 +2,16 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import { getMe, signIn, syncLibrary, logoutUser } from '../services/authApi';
 import { getLibrary } from '../utils/library';
 
+interface AuthUserPayload {
+  username?: string;
+  email?: string;
+}
+
 interface AuthValue {
   user: string | null;
   loading: boolean;
   login: (identifier: string, password: string) => Promise<boolean>;
+  signup: (authUser: AuthUserPayload | null) => void;
   logout: () => Promise<void>;
 }
 
@@ -45,6 +51,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const signup = (authUser: AuthUserPayload | null) => {
+    setUser(authUser?.username || authUser?.email || null);
+  };
+
   const logout = async () => {
     try {
       await logoutUser();
@@ -54,7 +64,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   };
 
-  const value = useMemo(() => ({ user, loading, login, logout }), [user, loading]);
+  const value = useMemo(() => ({ user, loading, login, signup, logout }), [user, loading]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

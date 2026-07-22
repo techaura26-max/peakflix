@@ -1,7 +1,18 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
 interface SecurityQuestion { id: number; question: string }
-interface AuthResponse { ok: boolean; token?: string; user?: any; error?: string; details?: unknown; valid?: boolean; items?: SecurityQuestion[] | string[]; message?: string }
+interface AuthResponse {
+  ok: boolean;
+  token?: string;
+  user?: any;
+  error?: string;
+  details?: unknown;
+  valid?: boolean;
+  items?: SecurityQuestion[] | string[];
+  message?: string;
+  recoveryToken?: string;
+  passwordResetToken?: string;
+}
 
 async function request<T = AuthResponse>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -36,12 +47,12 @@ export async function forgotPassword(identifier: string) {
   return request('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ identifier }) });
 }
 
-export async function verifySecurityAnswer(userId: string, answer: string) {
-  return request('/auth/verify-security-answer', { method: 'POST', body: JSON.stringify({ userId, answer }) });
+export async function verifySecurityAnswer(recoveryToken: string, answer: string) {
+  return request('/auth/verify-security-answer', { method: 'POST', body: JSON.stringify({ recoveryToken, answer }) });
 }
 
-export async function resetPassword(userId: string, password: string) {
-  return request('/auth/reset-password', { method: 'POST', body: JSON.stringify({ userId, password }) });
+export async function resetPassword(passwordResetToken: string, password: string, confirmPassword: string) {
+  return request('/auth/reset-password', { method: 'POST', body: JSON.stringify({ passwordResetToken, password, confirmPassword }) });
 }
 
 export async function updateProfile(updates: Record<string, unknown>) {
