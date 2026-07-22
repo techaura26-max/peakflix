@@ -1,78 +1,60 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { getProfile, signIn, syncLibrary } from '../services/authApi';
+import { getMe, signIn, syncLibrary, logoutUser } from '../services/authApi';
 import { getLibrary } from '../utils/library';
-
-function readStoredAuth() {
-  try {
-    const raw = localStorage.getItem('peakflix-user');
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
 
 interface AuthValue {
   user: string | null;
+  loading: boolean;
   login: (identifier: string, password: string) => Promise<boolean>;
-  logout: () => void;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const token = localStorage.getItem('peakflix-auth-token');
-    const storedUser = localStorage.getItem('peakflix-user');
-    if (token && storedUser) {
-      getProfile(token)
-        .then((response) => {
-          setUser(response.user?.username || response.user?.email || null);
-        })
-        .catch(() => {
-          localStorage.removeItem('peakflix-auth-token');
-          localStorage.removeItem('peakflix-user');
-          setUser(null);
-        });
-      return;
-    }
-    if (storedUser) {
+    const load = async () => {
       try {
-        const parsed = JSON.parse(storedUser) as { username?: string; email?: string };
-        setUser(parsed.username || parsed.email || null);
+        const response = await getMe();
+        setUser(response.user?.username || response.user?.email || null);
       } catch {
         setUser(null);
+      } finally {
+        setLoading(false);
       }
-    }
+    };
+    load();
   }, []);
 
   const login = async (identifier: string, password: string) => {
     try {
       const response = await signIn({ identifier, password });
-      const token = response.token;
       const authUser = response.user;
-      if (!token || !authUser) return false;
-      localStorage.setItem('peakflix-auth-token', token);
-      localStorage.setItem('peakflix-user', JSON.stringify(authUser));
+      if (!authUser) return false;
       setUser(authUser.username || authUser.email || null);
       const localFavorites = getLibrary('favorites').map((entry) => ({ id: entry.id }));
       const localHistory = getLibrary('continueWatching').map((entry) => ({ id: entry.id, progressSeconds: 0, durationSeconds: 0, seasonNumber: 1, episodeNumber: 1 }));
-      await syncLibrary('favorites', localFavorites, token);
-      await syncLibrary('watch_history', localHistory, token);
+      await syncLibrary('favorites', localFavorites);
+      await syncLibrary('watch_history', localHistory);
       return true;
     } catch {
       return false;
     }
   };
 
-  const logout = () => {
-    localStorage.removeItem('peakflix-auth-token');
-    localStorage.removeItem('peakflix-user');
+  const logout = async () => {
+    try {
+      await logoutUser();
+    } catch {
+      // ignore and clear local state
+    }
     setUser(null);
   };
 
-  const value = useMemo(() => ({ user, login, logout }), [user]);
+  const value = useMemo(() => ({ user, loading, login, logout }), [user, loading]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

@@ -1,9 +1,8 @@
-import { Heart, History, List, ListPlus, LogOut, Sparkles, Globe2 } from 'lucide-react';
+import { Heart, History, List, LogOut, Sparkles, Globe2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { getProfile, updateProfile, syncLibrary, getUserLibrary } from '../services/authApi';
-import type { MediaItem } from '../types/media';
+import { getMe, updateProfile, syncLibrary, getUserLibrary } from '../services/authApi';
 import { getLibrary } from '../utils/library';
 
 interface UserProfile { id: string; username: string; email: string; country?: string; language?: string }
@@ -19,20 +18,15 @@ export function ProfilePage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    const token = localStorage.getItem('peakflix-auth-token');
-    if (!token) {
-      navigate('/login');
-      return;
-    }
     const load = async () => {
       try {
         const [profileData, favoritesData, historyData] = await Promise.all([
-          getProfile(token),
-          getUserLibrary('favorites', token),
-          getUserLibrary('watch_history', token),
+          getMe(),
+          getUserLibrary('favorites'),
+          getUserLibrary('watch_history'),
         ]);
         setProfile(profileData.user);
-        setFavorites(profileData.user ? [] : []);
+        setFavorites((favoritesData.items || []).map((entry: any) => String(entry.id)));
         setHistory(historyData.items || []);
       } catch (e: any) {
         setError(e.message || 'Could not load profile.');
@@ -41,28 +35,24 @@ export function ProfilePage() {
       }
     };
     load();
-  }, [navigate]);
+  }, [navigate, user]);
 
   const saveLanguage = async (value: string) => {
     setLanguage(value);
     localStorage.setItem('peakflix-language', value);
-    const token = localStorage.getItem('peakflix-auth-token');
-    if (!token) return;
     try {
-      await updateProfile(token, { language: value });
+      await updateProfile({ language: value });
     } catch (e) {
       setError('Language preference could not be synced.');
     }
   };
 
   const syncData = async () => {
-    const token = localStorage.getItem('peakflix-auth-token');
-    if (!token) return;
     try {
       const localFavorites = getLibrary('favorites').map((entry) => ({ id: entry.id }));
       const localHistory = getLibrary('continueWatching').map((entry) => ({ id: entry.id, progressSeconds: 0, durationSeconds: 0, seasonNumber: 1, episodeNumber: 1 }));
-      await syncLibrary('favorites', localFavorites, token);
-      await syncLibrary('watch_history', localHistory, token);
+      await syncLibrary('favorites', localFavorites);
+      await syncLibrary('watch_history', localHistory);
       setError('');
     } catch (e: any) {
       setError(e.message || 'Sync failed.');

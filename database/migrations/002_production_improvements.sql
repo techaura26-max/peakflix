@@ -1,5 +1,7 @@
 -- Safe production upgrade migration for existing PeakFlix schema.
--- This migration preserves existing data and uses IF NOT EXISTS / IF EXISTS guards.
+-- This migration preserves existing data and uses safe, rerunnable operations.
+
+begin;
 
 create extension if not exists pgcrypto;
 
@@ -14,28 +16,43 @@ alter table users alter column language set default 'en';
 alter table users alter column language type varchar(10) using coalesce(language, 'en')::varchar(10);
 alter table users alter column language set not null;
 
-update users set username = trim(username) where username is not null and username <> trim(username);
-update users set email = lower(trim(email)) where email is not null and email <> lower(trim(email));
+-- Detect case-insensitive conflicts before creating unique indexes.
+do $$
+declare
+  username_conflicts text;
+  email_conflicts text;
+begin
+  select string_agg(format('%s (%s)', lower(trim(username)), cnt), ', ')
+    into username_conflicts
+  from (
+    select lower(trim(username)) as normalized_username, count(*) as cnt
+    from users
+    where username is not null
+    group by lower(trim(username))
+    having count(*) > 1
+  ) q;
 
--- Case-insensitive uniqueness for usernames/emails
-create table if not exists users_case_conflicts as
-select lower(username) as username_key, count(*) as cnt
-from users
-where username is not null
-group by lower(username)
-having count(*) > 1;
+  if username_conflicts is not null then
+    raise exception 'Cannot create case-insensitive username uniqueness because duplicate usernames exist: %', username_conflicts;
+  end if;
 
-create table if not exists users_email_conflicts as
-select lower(email) as email_key, count(*) as cnt
-from users
-where email is not null
-group by lower(email)
-having count(*) > 1;
+  select string_agg(format('%s (%s)', lower(trim(email)), cnt), ', ')
+    into email_conflicts
+  from (
+    select lower(trim(email)) as normalized_email, count(*) as cnt
+    from users
+    where email is not null
+    group by lower(trim(email))
+    having count(*) > 1
+  ) q;
 
--- The migration leaves conflicting rows intact and warns operators to resolve them manually.
--- Existing duplicates are not deleted automatically to avoid destructive changes.
-create unique index if not exists users_username_ci_idx on users (lower(username));
-create unique index if not exists users_email_ci_idx on users (lower(email));
+  if email_conflicts is not null then
+    raise exception 'Cannot create case-insensitive email uniqueness because duplicate emails exist: %', email_conflicts;
+  end if;
+end $$;
+
+create unique index if not exists users_username_ci_idx on users (lower(trim(username)));
+create unique index if not exists users_email_ci_idx on users (lower(trim(email)));
 
 -- Security questions table and FK
 create table if not exists security_questions (
@@ -58,30 +75,32 @@ insert into security_questions (id, question) values
   (10, 'What was the name of the street where you grew up?')
 on conflict (id) do nothing;
 
-insert into security_questions (id, question) values
-  (11, 'What is your favorite movie?')
-on conflict (id) do nothing;
+do $$
+begin
+  if not exists (
+    select 1 from information_schema.columns where table_name = 'users' and column_name = 'security_question_id'
+  ) then
+    return;
+  end if;
 
--- Recreate FK only when the referenced IDs are valid.
-DO $$
-BEGIN
-  IF EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'users' AND column_name = 'security_question_id'
-  ) THEN
-    IF NOT EXISTS (
-      SELECT 1 FROM users u
-      LEFT JOIN security_questions sq ON sq.id = u.security_question_id
-      WHERE u.security_question_id IS NOT NULL AND sq.id IS NULL
-    ) THEN
-      ALTER TABLE users
-        DROP CONSTRAINT IF EXISTS users_security_question_id_fkey;
-      ALTER TABLE users
-        ADD CONSTRAINT users_security_question_id_fkey
-        FOREIGN KEY (security_question_id) REFERENCES security_questions(id);
-    END IF;
-  END IF;
-END $$;
+  if exists (
+    select 1
+    from users u
+    left join security_questions sq on sq.id = u.security_question_id
+    where u.security_question_id is not null and sq.id is null
+  ) then
+    raise notice 'Skipping foreign key creation because some users reference unknown security_question_id values.';
+    return;
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint where conname = 'users_security_question_id_fkey'
+  ) then
+    alter table users
+      add constraint users_security_question_id_fkey
+      foreign key (security_question_id) references security_questions(id);
+  end if;
+end $$;
 
 -- Reusable updated_at function and triggers
 create or replace function set_updated_at()
@@ -117,83 +136,124 @@ update watch_history
 set media_type = case
   when season_number is not null or episode_number is not null then 'tv'
   else 'movie'
-end
-where media_type is null or media_type = '';
+end;
 
-alter table watch_history add constraint watch_history_media_type_check
-check (media_type in ('movie', 'tv')) not valid;
-alter table watch_history validate constraint watch_history_media_type_check;
+-- Constraint creation is rerunnable via pg_constraint checks.
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'watch_history_media_type_check') then
+    alter table watch_history add constraint watch_history_media_type_check
+      check (media_type in ('movie', 'tv'));
+  end if;
 
-alter table watch_history add constraint watch_history_progress_nonnegative_check
-check (progress_seconds >= 0) not valid;
-alter table watch_history validate constraint watch_history_progress_nonnegative_check;
+  if not exists (select 1 from pg_constraint where conname = 'watch_history_progress_nonnegative_check') then
+    alter table watch_history add constraint watch_history_progress_nonnegative_check
+      check (progress_seconds >= 0);
+  end if;
 
-alter table watch_history add constraint watch_history_duration_nonnegative_check
-check (duration_seconds >= 0) not valid;
-alter table watch_history validate constraint watch_history_duration_nonnegative_check;
+  if not exists (select 1 from pg_constraint where conname = 'watch_history_duration_nonnegative_check') then
+    alter table watch_history add constraint watch_history_duration_nonnegative_check
+      check (duration_seconds >= 0);
+  end if;
 
-alter table watch_history add constraint watch_history_season_positive_check
-check (season_number is null or season_number > 0) not valid;
-alter table watch_history validate constraint watch_history_season_positive_check;
+  if not exists (select 1 from pg_constraint where conname = 'watch_history_season_positive_check') then
+    alter table watch_history add constraint watch_history_season_positive_check
+      check (season_number is null or season_number > 0);
+  end if;
 
-alter table watch_history add constraint watch_history_episode_positive_check
-check (episode_number is null or episode_number > 0) not valid;
-alter table watch_history validate constraint watch_history_episode_positive_check;
+  if not exists (select 1 from pg_constraint where conname = 'watch_history_episode_positive_check') then
+    alter table watch_history add constraint watch_history_episode_positive_check
+      check (episode_number is null or episode_number > 0);
+  end if;
+end $$;
 
--- Deduplicate watch history by keeping the newest row per logical key.
-create temporary table watch_history_duplicates as
-select user_id, media_type, movie_id, coalesce(season_number, 0) as season_num, coalesce(episode_number, 0) as episode_num, max(last_watched_at) as latest_seen
-from watch_history
-group by user_id, media_type, movie_id, coalesce(season_number, 0), coalesce(episode_number, 0)
-having count(*) > 1;
-
-delete from watch_history wh
-using watch_history_duplicates d
-where wh.user_id = d.user_id
-  and wh.media_type = d.media_type
-  and wh.movie_id = d.movie_id
-  and coalesce(wh.season_number, 0) = d.season_num
-  and coalesce(wh.episode_number, 0) = d.episode_num
-  and wh.last_watched_at < d.latest_seen;
+-- Deduplicate watch history by keeping the newest and most advanced row.
+with ranked as (
+  select
+    id,
+    row_number() over (
+      partition by user_id, media_type, movie_id, coalesce(season_number, 0), coalesce(episode_number, 0)
+      order by last_watched_at desc, progress_seconds desc, updated_at desc, id desc
+    ) as rn
+  from watch_history
+)
+delete from watch_history
+where id in (select id from ranked where rn > 1);
 
 create unique index if not exists watch_history_logical_key_uidx
 on watch_history (user_id, media_type, movie_id, coalesce(season_number, 0), coalesce(episode_number, 0));
-
-drop table if exists watch_history_duplicates;
 
 -- Favorites upgrades
 alter table favorites add column if not exists media_type varchar(10) not null default 'movie';
 update favorites set media_type = 'movie' where media_type is null or media_type = '';
 
-alter table favorites add constraint favorites_media_type_check
-check (media_type in ('movie', 'tv')) not valid;
-alter table favorites validate constraint favorites_media_type_check;
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'favorites_user_id_movie_id_key') then
+    -- no-op when the old constraint is already gone
+    null;
+  end if;
+end $$;
 
-drop index if exists favorites_user_id_movie_id_key;
-create unique index if not exists favorites_user_media_movie_uidx
-on favorites (user_id, media_type, movie_id);
+alter table favorites drop constraint if exists favorites_user_id_movie_id_key;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'favorites_media_type_check') then
+    alter table favorites add constraint favorites_media_type_check
+      check (media_type in ('movie', 'tv'));
+  end if;
+end $$;
+
+create unique index if not exists favorites_user_media_movie_uidx on favorites (user_id, media_type, movie_id);
 create index if not exists favorites_user_id_idx on favorites (user_id);
 create index if not exists favorites_user_created_at_idx on favorites (user_id, created_at desc);
 
 -- Lists upgrades
 alter table movie_lists add column if not exists updated_at timestamptz not null default now();
 
-update movie_lists set name = trim(name) where name is not null and name <> trim(name);
+-- Detect case-insensitive duplicate list names before creating a unique index.
+do $$
+declare
+  duplicate_lists text;
+begin
+  select string_agg(format('%s (%s)', lower(trim(name)), cnt), ', ')
+    into duplicate_lists
+  from (
+    select user_id, lower(trim(name)) as normalized_name, count(*) as cnt
+    from movie_lists
+    where name is not null
+    group by user_id, lower(trim(name))
+    having count(*) > 1
+  ) q;
 
-create unique index if not exists movie_lists_user_name_ci_idx on movie_lists (user_id, lower(name));
+  if duplicate_lists is not null then
+    raise exception 'Cannot create case-insensitive list name uniqueness because duplicate list names exist: %', duplicate_lists;
+  end if;
+end $$;
+
+create unique index if not exists movie_lists_user_name_ci_idx on movie_lists (user_id, lower(trim(name)));
 create index if not exists movie_lists_user_id_idx on movie_lists (user_id);
 
 alter table movie_list_items add column if not exists media_type varchar(10) not null default 'movie';
 update movie_list_items set media_type = 'movie' where media_type is null or media_type = '';
 
-alter table movie_list_items add constraint movie_list_items_media_type_check
-check (media_type in ('movie', 'tv')) not valid;
-alter table movie_list_items validate constraint movie_list_items_media_type_check;
+alter table movie_list_items drop constraint if exists movie_list_items_list_id_movie_id_key;
 
-drop index if exists movie_list_items_list_id_movie_id_key;
-create unique index if not exists movie_list_items_list_media_movie_uidx
-on movie_list_items (list_id, media_type, movie_id);
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'movie_list_items_media_type_check') then
+    alter table movie_list_items add constraint movie_list_items_media_type_check
+      check (media_type in ('movie', 'tv'));
+  end if;
+end $$;
+
+create unique index if not exists movie_list_items_list_media_movie_uidx on movie_list_items (list_id, media_type, movie_id);
 create index if not exists movie_list_items_list_id_idx on movie_list_items (list_id);
 
--- Search history upgrades
+-- Additional indexes
+create index if not exists watch_history_user_id_idx on watch_history (user_id);
+create index if not exists watch_history_user_last_watched_idx on watch_history (user_id, last_watched_at desc);
 create index if not exists search_history_user_created_at_idx on search_history (user_id, created_at desc);
+
+commit;

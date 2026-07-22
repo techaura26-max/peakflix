@@ -6,6 +6,7 @@ interface AuthResponse { ok: boolean; token?: string; user?: any; error?: string
 async function request<T = AuthResponse>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    credentials: 'include',
     ...options,
   });
   const data = await response.json().catch(() => ({}));
@@ -17,6 +18,10 @@ async function request<T = AuthResponse>(path: string, options: RequestInit = {}
 
 export async function signUp(payload: Record<string, unknown>) {
   return request('/auth/signup', { method: 'POST', body: JSON.stringify(payload) });
+}
+
+export async function getMe() {
+  return request('/auth/profile', { method: 'POST' });
 }
 
 export async function getSecurityQuestions() {
@@ -39,26 +44,26 @@ export async function resetPassword(userId: string, password: string) {
   return request('/auth/reset-password', { method: 'POST', body: JSON.stringify({ userId, password }) });
 }
 
-export async function getProfile(token: string) {
-  return request('/auth/profile', { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+export async function updateProfile(updates: Record<string, unknown>) {
+  return request('/auth/profile', { method: 'PUT', body: JSON.stringify(updates) });
 }
 
-export async function updateProfile(token: string, updates: Record<string, unknown>) {
-  return request('/auth/profile', { method: 'PUT', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(updates) });
+export async function syncLibrary(kind: string, items: Array<Record<string, unknown>>) {
+  return request('/library/sync', { method: 'POST', body: JSON.stringify({ kind, items }) });
 }
 
-export async function syncLibrary(kind: string, items: Array<Record<string, unknown>>, token: string) {
-  return request('/library/sync', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ kind, items }) });
+export async function getUserLibrary(kind: string) {
+  return request(`/library/${kind}`, { method: 'GET' });
 }
 
-export async function getUserLibrary(kind: string, token: string) {
-  return request(`/library/${kind}`, { method: 'GET', headers: { Authorization: `Bearer ${token}` } });
+export async function saveSearchHistory(searchText: string) {
+  return request('/search/history', { method: 'POST', body: JSON.stringify({ searchText }) });
 }
 
-export async function saveSearchHistory(searchText: string, token: string) {
-  return request('/search/history', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ searchText }) });
+export async function getSearchHistory() {
+  return request('/search/history', { method: 'GET' });
 }
 
-export async function getSearchHistory(token: string) {
-  return request('/search/history', { method: 'GET', headers: { Authorization: `Bearer ${token}` } });
+export async function logoutUser() {
+  return request('/auth/logout', { method: 'POST' });
 }

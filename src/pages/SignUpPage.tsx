@@ -35,12 +35,9 @@ export function SignUpPage() {
     setSuccess('');
 
     try {
-      const result = await signUp({ ...form, country: form.country || query });
-      const token = result.token;
-      if (token) {
-        localStorage.setItem('peakflix-auth-token', token);
-        localStorage.setItem('peakflix-user', JSON.stringify(result.user));
-        login(form.username, form.password);
+      await signUp({ ...form, country: form.country || query });
+      const ok = await login(form.username, form.password);
+      if (ok) {
         setSuccess('Account created successfully.');
         navigate('/');
       }
