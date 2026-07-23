@@ -10,7 +10,8 @@ function buildAppWithQuery(queryImpl, extraDeps = {}) {
   process.env.JWT_SECRET = 'test-jwt';
   process.env.PASSWORD_RESET_SECRET = 'test-reset';
   process.env.FRONTEND_URL = 'http://localhost:5173';
-  return createApp({ query: queryImpl, healthCheck: async () => true, withTransaction: extraDeps.withTransaction, ...extraDeps });
+  const transactionImpl = extraDeps.withTransaction || (async (callback) => callback({ query: queryImpl }));
+  return createApp({ query: queryImpl, healthCheck: async () => true, withTransaction: transactionImpl, ...extraDeps });
 }
 
 function createSessionCookie(user) {
@@ -204,7 +205,7 @@ test('successful reset increments session_version', async () => {
   let transactionCalls = 0;
   let updateParams = [];
   const app = buildAppWithQuery(async (text, params) => {
-    if (text.includes('select id, session_version, is_active from users where id = $1 limit 1')) {
+    if (text.includes('select id, session_version, is_active from users where id = $1')) {
       assert.deepEqual(params, ['user-1']);
       return { rows: [{ id: 'user-1', session_version: 1, is_active: true }] };
     }
@@ -461,7 +462,7 @@ test('database failure does not return authentication failed', async () => {
 test('reset database failure does not return 401', async () => {
   const recoveryToken = jwt.sign({ sub: 'user-1', purpose: 'password-reset' }, process.env.PASSWORD_RESET_SECRET, { expiresIn: '10m' });
   const app = buildAppWithQuery(async (text) => {
-    if (text.includes('select id, session_version, is_active from users where id = $1 limit 1')) {
+    if (text.includes('select id, session_version, is_active from users where id = $1')) {
       const error = new Error('connection lost');
       error.code = 'ECONNREFUSED';
       throw error;
