@@ -18,7 +18,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      VITE_TMDB_READ_TOKEN: ${{ secrets.TMDB_READ_TOKEN }}
+      VITE_TMDB_READ_TOKEN: ${{ secrets.VITE_TMDB_READ_TOKEN }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -34,7 +34,7 @@ jobs:
 
       - name: Verify required secrets
         run: |
-          test -n "$VITE_TMDB_READ_TOKEN" || (echo "TMDB_READ_TOKEN secret is missing" && exit 1)
+          test -n "$VITE_TMDB_READ_TOKEN" || (echo "VITE_TMDB_READ_TOKEN secret is missing" && exit 1)
 
       - name: Build production website
         run: npm run build
