@@ -25,7 +25,7 @@ export function SearchAutocomplete({
   onSearch,
 }: SearchAutocompleteProps) {
   const navigate = useNavigate();
-  const { i18n } = useTranslation();
+  const { i18n, t } = useTranslation();
   const { title } = useLocalizedMedia();
   const [query, setQuery] = useState(initialValue);
   const [items, setItems] = useState<MediaItem[]>([]);
@@ -120,6 +120,7 @@ export function SearchAutocomplete({
         placeholder={placeholder}
         autoComplete="off"
         role="combobox"
+        aria-autocomplete="list"
         aria-expanded={open}
         aria-controls={listId}
         aria-activedescendant={activeIndex >= 0 ? `${listId}-${activeIndex}` : undefined}
@@ -142,13 +143,13 @@ export function SearchAutocomplete({
               {item.poster ? <img src={item.poster} alt="" /> : <span className="search-suggestions__poster" />}
               <span className="search-suggestions__copy">
                 <strong>{title(item)}</strong>
-                <small>{item.tmdbType === 'tv' ? 'Series' : 'Movie'}{item.year ? ` · ${item.year}` : ''}</small>
+                <small>{item.tmdbType === 'tv' ? t('tvSeries') : t('movie')}{item.year ? ` · ${item.year}` : ''}</small>
               </span>
               <span className="search-suggestions__rating">★ {item.rating || '—'}</span>
             </button>
           ))}
-          {loading ? <div className="search-suggestions__status">Searching…</div> : null}
-          {!loading && !items.length ? <div className="search-suggestions__status">No matching titles</div> : null}
+          {loading ? <div className="search-suggestions__status" role="status">{t('searching')}</div> : null}
+          {!loading && !items.length ? <div className="search-suggestions__status">{t('noMatching')}</div> : null}
         </div>
       ) : null}
     </form>

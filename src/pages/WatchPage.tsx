@@ -6,7 +6,9 @@ import { RecommendationsRow } from '../components/RecommendationsRow';
 import { useLocalizedMedia } from '../hooks/useLocalizedMedia';
 import { getDetails, getRecommendations, getSeasonEpisodes } from '../services/tmdb';
 import type { MediaEpisode, MediaItem, MediaSeason } from '../types/media';
-import { getWatchProgress, saveWatchProgress } from '../utils/library';
+import { getWatchProgress, isEpisodeWatched, saveWatchProgress, toggleEpisodeWatched } from '../utils/library';
+import { ErrorState, LoadingState } from '../components/PageState';
+import { Seo } from '../components/Seo';
 
 const SERVERS = ['VidSrc', 'VidSrcPM', 'SmashyStream', 'MultiEmbed'] as const;
 type ServerName = typeof SERVERS[number];
@@ -23,7 +25,7 @@ function streamUrl(server: ServerName, tmdbId: number, isTv: boolean, season: nu
 
 export function WatchPage() {
   const { id = '' } = useParams();
-  const { i18n } = useTranslation();
+  const { i18n, t } = useTranslation();
   const { title } = useLocalizedMedia();
   const [item, setItem] = useState<MediaItem | null>(null);
   const [seasons, setSeasons] = useState<MediaSeason[]>([]);
@@ -36,6 +38,8 @@ export function WatchPage() {
   const [loading, setLoading] = useState(true);
   const [episodesLoading, setEpisodesLoading] = useState(false);
   const [error, setError] = useState('');
+  const [attempt, setAttempt] = useState(0);
+  const [, setWatchedVersion] = useState(0);
   const language = i18n.resolvedLanguage || localStorage.getItem('peakflix-language') || 'en';
   const ar = language === 'ar';
   const isTv = item?.tmdbType === 'tv' || id.startsWith('tv-');
@@ -63,7 +67,7 @@ export function WatchPage() {
       .finally(() => { if (active) setLoading(false); });
 
     return () => { active = false; };
-  }, [id, language]);
+  }, [attempt, id, language]);
 
   useEffect(() => {
     if (!item?.tmdbId || item.tmdbType !== 'tv') return;
@@ -92,22 +96,23 @@ export function WatchPage() {
   const canGoBack = currentEpisodeIndex > 0;
   const canGoForward = currentEpisodeIndex >= 0 && currentEpisodeIndex < episodes.length - 1;
 
-  if (loading) return <div className="page-shell"><div className="empty-state"><h2>{ar ? 'جاري تحميل المشغل…' : 'Loading player…'}</h2></div></div>;
-  if (error || !item) return <div className="page-shell"><div className="empty-state"><h2>{error || 'Title unavailable'}</h2><p>{ar ? 'حاول مرة أخرى بعد قليل.' : 'Please try again in a moment.'}</p></div></div>;
+  if (loading) return <div className="page-shell"><LoadingState cards={4} /></div>;
+  if (error || !item) return <div className="page-shell"><ErrorState message={error} onRetry={() => setAttempt((value) => value + 1)} /></div>;
 
   return (
     <div className="watch-page" dir={ar ? 'rtl' : 'ltr'}>
+      <Seo title={`${title(item)} · ${t('play')}`} description={item.description} image={item.backdrop} />
       <div className="watch-top">
-        <Link to={`/title/${id}`} aria-label={ar ? 'العودة للتفاصيل' : 'Back to details'}><ArrowLeft /></Link>
+        <Link to={`/title/${id}`} aria-label={t('backDetails')}><ArrowLeft /></Link>
         <div>
-          <small>{isTv ? <Tv size={13} /> : <Film size={13} />}{isTv ? (ar ? 'مشاهدة مسلسل' : 'Series player') : (ar ? 'مشاهدة فيلم' : 'Movie player')}</small>
-          <h1>{title(item)} {isTv ? <span>{ar ? `الموسم ${activeSeason} · الحلقة ${activeEpisode}` : `S${activeSeason} · E${activeEpisode}`}</span> : null}</h1>
+          <small>{isTv ? <Tv size={13} /> : <Film size={13} />}{isTv ? t('seriesPlayer') : t('moviePlayer')}</small>
+          <h1>{title(item)} {isTv ? <span>{t('season')} {activeSeason} · {t('episode')} {activeEpisode}</span> : null}</h1>
         </div>
-        <span className="watch-saved"><CheckCircle2 size={15} />{ar ? 'يُحفظ تلقائياً' : 'Progress saved locally'}</span>
+        <span className="watch-saved"><CheckCircle2 size={15} />{t('progressSaved')}</span>
       </div>
 
-      <div className="server-picker" aria-label={ar ? 'خوادم المشاهدة' : 'Streaming servers'}>
-        <span><Server size={16} />{ar ? 'اختر السيرفر:' : 'Choose a server:'}</span>
+      <div className="server-picker" aria-label={t('streamingServers')}>
+        <span><Server size={16} />{t('chooseServer')}</span>
         {SERVERS.map((server) => (
           <button key={server} className={server === activeServer ? 'is-active' : ''} onClick={() => setActiveServer(server)}>{server}</button>
         ))}
@@ -127,10 +132,10 @@ export function WatchPage() {
       {isTv && episodes.length ? (
         <div className="episode-navigation">
           <button disabled={!canGoBack} onClick={() => setActiveEpisode(episodes[currentEpisodeIndex - 1].episode_number)}>
-            <ArrowLeft size={17} />{ar ? 'الحلقة السابقة' : 'Previous episode'}
+            <ArrowLeft size={17} />{t('previousEpisode')}
           </button>
           <button disabled={!canGoForward} onClick={() => setActiveEpisode(episodes[currentEpisodeIndex + 1].episode_number)}>
-            {ar ? 'الحلقة التالية' : 'Next episode'}<ArrowRight size={17} />
+            {t('nextEpisode')}<ArrowRight size={17} />
           </button>
         </div>
       ) : null}
@@ -139,35 +144,45 @@ export function WatchPage() {
         <section className="episode-browser">
           {seasons.length ? (
             <label className="season-picker">
-              <span>{ar ? 'الموسم' : 'Season'}</span>
+              <span>{t('season')}</span>
               <select value={activeSeason} onChange={(event) => { setActiveSeason(Number(event.target.value)); setActiveEpisode(1); }}>
-                {seasons.map((season) => <option key={season.id} value={season.season_number}>{season.name || `${ar ? 'الموسم' : 'Season'} ${season.season_number}`} ({season.episode_count})</option>)}
+                {seasons.map((season) => <option key={season.id} value={season.season_number}>{season.name || `${t('season')} ${season.season_number}`} ({season.episode_count})</option>)}
               </select>
             </label>
           ) : null}
 
-          {episodesLoading ? <p className="load-status">{ar ? 'جاري تحميل الحلقات…' : 'Loading episodes…'}</p> : null}
+          {episodesLoading ? <p className="load-status">{t('loadingEpisodes')}</p> : null}
           <div className="episode-grid">
             {episodes.map((episode) => (
-              <button
+              <article
                 key={episode.id}
                 className={`episode-card ${episode.episode_number === activeEpisode ? 'is-active' : ''}`}
-                onClick={() => setActiveEpisode(episode.episode_number)}
               >
-                <span className="episode-card__image">
-                  {episode.still_path ? <img src={`https://image.tmdb.org/t/p/w500${episode.still_path}`} alt="" loading="lazy" /> : <span>PEAKFLIX</span>}
-                  <small>{ar ? `حلقة ${episode.episode_number}` : `Episode ${episode.episode_number}`}</small>
-                  {episode.vote_average ? <em><Star size={12} fill="currentColor" />{episode.vote_average.toFixed(1)}</em> : null}
-                </span>
-                <strong>{episode.name || `${ar ? 'الحلقة' : 'Episode'} ${episode.episode_number}`}</strong>
-                <p>{episode.overview || (ar ? 'لا يوجد وصف متاح لهذه الحلقة.' : 'No description is available for this episode.')}</p>
-              </button>
+                <button type="button" className="episode-select" onClick={() => setActiveEpisode(episode.episode_number)}>
+                  <span className="episode-card__image">
+                    {episode.still_path ? <img src={`https://image.tmdb.org/t/p/w500${episode.still_path}`} alt="" loading="lazy" /> : <span>PEAKFLIX</span>}
+                    <small>{t('episode')} {episode.episode_number}</small>
+                    {episode.vote_average ? <em><Star size={12} fill="currentColor" />{episode.vote_average.toFixed(1)}</em> : null}
+                  </span>
+                  <strong>{episode.name || `${t('episode')} ${episode.episode_number}`}</strong>
+                  <p>{episode.overview || t('noDescription')}</p>
+                </button>
+                <button
+                  type="button"
+                  className={`episode-watched ${isEpisodeWatched(item.id, activeSeason, episode.episode_number) ? 'is-watched' : ''}`}
+                  aria-label={isEpisodeWatched(item.id, activeSeason, episode.episode_number) ? t('markUnwatched') : t('markWatched')}
+                  aria-pressed={isEpisodeWatched(item.id, activeSeason, episode.episode_number)}
+                  onClick={() => { toggleEpisodeWatched(item, activeSeason, episode.episode_number); setWatchedVersion((value) => value + 1); }}
+                >
+                  <CheckCircle2 size={17} />{isEpisodeWatched(item.id, activeSeason, episode.episode_number) ? t('watched') : t('markWatched')}
+                </button>
+              </article>
             ))}
           </div>
         </section>
       ) : null}
 
-      {recommendations.length ? <RecommendationsRow title={ar ? 'اقتراحات مشابهة' : 'More like this'} items={recommendations} /> : null}
+      {recommendations.length ? <RecommendationsRow title={t('moreLikeThis')} items={recommendations} /> : null}
     </div>
   );
 }

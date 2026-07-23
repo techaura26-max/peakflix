@@ -1,65 +1,64 @@
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 
-const resources = {
-  en: { translation: {
-    home: 'Home', movies: 'Movies', series: 'Series', anime: 'Anime', turkishSeries: 'Turkish Series', turkishDrama: 'Korean Drama',
-    search: 'Search movies, series, anime…', trending: 'Trending', trendingMovies: 'Trending Movies', trendingSeries: 'Trending Series', trendingAnime: 'Trending Anime',
-    continueWatching: 'Continue Watching', play: 'Play now', trailer: 'Watch trailer', details: 'View details',
-    noResults: 'No titles found', browse: 'Browse collection', rating: 'Rating', episodes: 'Episodes', resume: 'Resume', guest: 'Guest',
-    allRights: 'This app is for demo and entertainment purposes only.'
-  }},
-  ar: { translation: {
-    home: 'الرئيسية', movies: 'أفلام', series: 'مسلسلات', anime: 'أنمي', turkishSeries: 'مسلسلات تركية', turkishDrama: 'دراما كورية',
-    search: 'ابحث عن فيلم أو مسلسل أو أنمي…', trending: 'ترند', trendingMovies: 'أفلام ترند', trendingSeries: 'مسلسلات ترند', trendingAnime: 'أنميات ترند',
-    continueWatching: 'أكمل المشاهدة', play: 'شاهد الآن', trailer: 'شاهد الإعلان', details: 'عرض التفاصيل',
-    noResults: 'لم يتم العثور على نتائج', browse: 'تصفح المحتوى', rating: 'التقييم', episodes: 'الحلقات', resume: 'متابعة', guest: 'زائر',
-    allRights: 'هذا التطبيق للاستخدام التجريبي والترفيهي فقط.'
-  }},
-  es: { translation: {
-    home: 'Inicio', movies: 'Películas', series: 'Series', anime: 'Anime', turkishSeries: 'Series Turcas', turkishDrama: 'Drama Coreano',
-    search: 'Buscar películas, series, anime…', trending: 'Tendencia', trendingMovies: 'Películas Tendencia', trendingSeries: 'Series Tendencia', trendingAnime: 'Anime Tendencia',
-    continueWatching: 'Continuar viendo', play: 'Ver ahora', trailer: 'Ver tráiler', details: 'Ver detalles',
-    noResults: 'No se encontraron resultados', browse: 'Explorar colección', rating: 'Valoración', episodes: 'Episodios', resume: 'Reanudar', guest: 'Invitado',
-    allRights: 'Esta aplicación es solo para fines de demostración y entretenimiento.'
-  }},
-  ja: { translation: {
-    home: 'ホーム', movies: '映画', series: 'シリーズ', anime: 'アニメ', turkishSeries: 'トルコドラマ', turkishDrama: '韓国ドラマ',
-    search: '映画、シリーズ、アニメを検索…', trending: 'トレンド', trendingMovies: '人気の映画', trendingSeries: '人気のシリーズ', trendingAnime: '人気のアニメ',
-    continueWatching: '視聴を続ける', play: '今すぐ再生', trailer: '予告編を見る', details: '詳細を見る',
-    noResults: '結果が見つかりません', browse: 'コレクションを閲覧', rating: '評価', episodes: 'エピソード', resume: '再開', guest: 'ゲスト',
-    allRights: 'このアプリはデモとエンターテイメント目的のみです。'
-  }},
-  fr: { translation: {
-    home: 'Accueil', movies: 'Films', series: 'Séries', anime: 'Anime', turkishSeries: 'Séries Turques', turkishDrama: 'Drama Coréen',
-    search: 'Rechercher films, séries, anime…', trending: 'Tendance', trendingMovies: 'Films tendances', trendingSeries: 'Séries tendances', trendingAnime: 'Animes tendances',
-    continueWatching: 'Continuer la lecture', play: 'Lire maintenant', trailer: 'Voir la bande-annonce', details: 'Voir les détails',
-    noResults: 'Aucun résultat trouvé', browse: 'Parcourir la collection', rating: 'Note', episodes: 'Épisodes', resume: 'Reprendre', guest: 'Invité',
-    allRights: 'Cette application est uniquement destinée à la démo et au divertissement.'
-  }},
-  it: { translation: {
-    home: 'Home', movies: 'Film', series: 'Serie TV', anime: 'Anime', turkishSeries: 'Serie Turche', turkishDrama: 'Drammi Coreani',
-    search: 'Cerca film, serie, anime…', trending: 'Tendenza', trendingMovies: 'Film di tendenza', trendingSeries: 'Serie di tendenza', trendingAnime: 'Anime di tendenza',
-    continueWatching: 'Continua a guardare', play: 'Riproduci', trailer: 'Guarda il trailer', details: 'Dettagli',
-    noResults: 'Nessun risultato', browse: 'Esplora', rating: 'Valutazione', episodes: 'Episodi', resume: 'Riprendi', guest: 'Ospite',
-    allRights: 'Questa app è solo a scopo dimostrativo e di intrattenimento.'
-  }},
-  de: { translation: {
-    home: 'Startseite', movies: 'Filme', series: 'Serien', anime: 'Anime', turkishSeries: 'Türkische Serien', turkishDrama: 'Koreanisches Drama',
-    search: 'Filme, Serien, Anime suchen…', trending: 'Trend', trendingMovies: 'Beliebte Filme', trendingSeries: 'Beliebte Serien', trendingAnime: 'Beliebte Anime',
-    continueWatching: 'Weiter schauen', play: 'Jetzt abspielen', trailer: 'Trailer ansehen', details: 'Details ansehen',
-    noResults: 'Keine Ergebnisse gefunden', browse: 'Sammlung durchsuchen', rating: 'Bewertung', episodes: 'Episoden', resume: 'Fortsetzen', guest: 'Gast',
-    allRights: 'Diese App ist nur zu Demo- und Unterhaltungszwecken gedacht.'
-  }}
+const en = {
+  home: 'Home', movies: 'Movies', series: 'Series', anime: 'Anime', turkishSeries: 'Turkish Series', koreanDrama: 'Korean Drama', library: 'My Library',
+  search: 'Search movies, series, anime…', trending: 'Trending', trendingMovies: 'Trending Movies', trendingSeries: 'Trending Series', trendingAnime: 'Trending Anime',
+  continueWatching: 'Continue Watching', recommended: 'Recommended for you', play: 'Play now', trailer: 'Watch trailer', details: 'View details', browse: 'Browse collection',
+  loading: 'Loading…', loadMore: 'Load more', retry: 'Try again', noResults: 'No titles found', noDescription: 'No description is available.', offlineError: 'We could not load this content. Check your connection and try again.',
+  rating: 'Rating', episodes: 'Episodes', seasons: 'Seasons', resume: 'Resume', movie: 'Movie', tvSeries: 'Series', explore: 'Explore PeakFlix', hourShort: 'h', minuteShort: 'm',
+  suggestions: 'Suggestions', recentSearches: 'Recent searches', startTyping: 'Start typing to discover movies, series, and anime.', searching: 'Searching…', noMatching: 'No matching titles',
+  filters: 'Filters', mediaType: 'Media type', allTypes: 'All types', genre: 'Genre', allGenres: 'All genres', originalLanguage: 'Original language', allLanguages: 'All languages', year: 'Year', anyYear: 'Any year', minimumRating: 'Minimum rating', anyRating: 'Any rating',
+  sortBy: 'Sort by', mostRelevant: 'Most relevant', mostPopular: 'Most popular', highestRated: 'Highest rated', newest: 'Newest', resultsCount: '{{count}} results', clearFilters: 'Clear filters',
+  availableOn: 'Available on', addFavorite: 'Add to favorites', favorite: 'Favorite', watchLater: 'Watch later', saved: 'Saved', whereToWatch: 'Where to watch', similarPicks: 'Similar picks',
+  cast: 'Cast', directedBy: 'Directed by', ageRating: 'Age rating', status: 'Status', share: 'Share', copied: 'Link copied', close: 'Close',
+  libraryTitle: 'My Library', libraryDescription: 'Your private collection is saved only in this browser.', favorites: 'Favorites', history: 'History', watched: 'Watched',
+  emptyLibrary: 'Nothing here yet. Add titles while browsing PeakFlix.', remove: 'Remove', clear: 'Clear section', exportLibrary: 'Export library', importLibrary: 'Import library', backupImported: 'Library imported successfully.', invalidBackup: 'That file is not a valid PeakFlix backup.',
+  markWatched: 'Mark watched', markUnwatched: 'Mark unwatched', clearConfirm: 'Clear everything in this section?',
+  seriesPlayer: 'Series player', moviePlayer: 'Movie player', progressSaved: 'Progress saved locally', chooseServer: 'Choose a server:', streamingServers: 'Streaming servers', backDetails: 'Back to details', season: 'Season', episode: 'Episode', previousEpisode: 'Previous episode', nextEpisode: 'Next episode', loadingEpisodes: 'Loading episodes…', moreLikeThis: 'More like this',
+  about: 'About', privacy: 'Privacy', disclaimer: 'Disclaimer', installApp: 'Install app', updateAvailable: 'A new PeakFlix version is ready.', refresh: 'Refresh',
+  aboutTitle: 'About PeakFlix', aboutBody: 'PeakFlix is a student-built media discovery experience for exploring movies, series, anime, Korean drama, and Turkish series.',
+  privacyTitle: 'Privacy', privacyBody: 'PeakFlix has no accounts or database. Favorites, history, search terms, and viewing progress stay in your browser. Clearing site data removes them.',
+  disclaimerTitle: 'Disclaimer', disclaimerBody: 'PeakFlix does not host media files. Availability and third-party players are provided for demonstration purposes and remain the responsibility of their respective providers.',
+  tmdbAttribution: 'This product uses the TMDB API but is not endorsed or certified by TMDB.', allRights: 'Demo and entertainment project.',
+  somethingWrong: 'Something went wrong', unexpectedError: 'The page hit an unexpected error. You can safely return home and try again.', backHome: 'Back to home',
+  navigation: 'Primary navigation', openMenu: 'Open menu', closeMenu: 'Close menu', language: 'Language', skipContent: 'Skip to content', slide: 'Go to slide {{number}}', previousSlide: 'Previous title', nextSlide: 'Next title',
 };
 
-const saved = localStorage.getItem('peakflix-language') || localStorage.getItem('cinevault-language') || 'en';
-i18n.use(initReactI18next).init({ 
-  resources, 
-  lng: saved, 
-  fallbackLng: 'en', 
+const ar: typeof en = {
+  home: 'الرئيسية', movies: 'الأفلام', series: 'المسلسلات', anime: 'الأنمي', turkishSeries: 'مسلسلات تركية', koreanDrama: 'دراما كورية', library: 'مكتبتي',
+  search: 'ابحث عن فيلم أو مسلسل أو أنمي…', trending: 'الأكثر رواجًا', trendingMovies: 'أفلام رائجة', trendingSeries: 'مسلسلات رائجة', trendingAnime: 'أنمي رائج',
+  continueWatching: 'أكمل المشاهدة', recommended: 'مختارات لك', play: 'شاهد الآن', trailer: 'شاهد الإعلان', details: 'عرض التفاصيل', browse: 'تصفح المحتوى',
+  loading: 'جاري التحميل…', loadMore: 'عرض المزيد', retry: 'حاول مجددًا', noResults: 'لم نعثر على عناوين', noDescription: 'لا يوجد وصف متاح.', offlineError: 'تعذر تحميل المحتوى. تحقق من الاتصال وحاول مجددًا.',
+  rating: 'التقييم', episodes: 'الحلقات', seasons: 'المواسم', resume: 'متابعة', movie: 'فيلم', tvSeries: 'مسلسل', explore: 'استكشف PeakFlix', hourShort: 'س', minuteShort: 'د',
+  suggestions: 'اقتراحات', recentSearches: 'عمليات البحث الأخيرة', startTyping: 'ابدأ بالكتابة لاكتشاف الأفلام والمسلسلات والأنمي.', searching: 'جاري البحث…', noMatching: 'لا توجد عناوين مطابقة',
+  filters: 'الفلاتر', mediaType: 'نوع المحتوى', allTypes: 'كل الأنواع', genre: 'التصنيف', allGenres: 'كل التصنيفات', originalLanguage: 'اللغة الأصلية', allLanguages: 'كل اللغات', year: 'السنة', anyYear: 'كل السنوات', minimumRating: 'أقل تقييم', anyRating: 'أي تقييم',
+  sortBy: 'الترتيب', mostRelevant: 'الأكثر صلة', mostPopular: 'الأكثر شعبية', highestRated: 'الأعلى تقييمًا', newest: 'الأحدث', resultsCount: '{{count}} نتيجة', clearFilters: 'مسح الفلاتر',
+  availableOn: 'متاح للمشاهدة على', addFavorite: 'إضافة للمفضلة', favorite: 'مفضل', watchLater: 'مشاهدة لاحقًا', saved: 'محفوظ', whereToWatch: 'أماكن المشاهدة', similarPicks: 'اقتراحات مشابهة',
+  cast: 'طاقم التمثيل', directedBy: 'إخراج', ageRating: 'التصنيف العمري', status: 'الحالة', share: 'مشاركة', copied: 'تم نسخ الرابط', close: 'إغلاق',
+  libraryTitle: 'مكتبتي', libraryDescription: 'مجموعتك الخاصة محفوظة في هذا المتصفح فقط.', favorites: 'المفضلة', history: 'سجل المشاهدة', watched: 'تمت مشاهدته',
+  emptyLibrary: 'لا يوجد شيء هنا بعد. أضف العناوين أثناء تصفح PeakFlix.', remove: 'إزالة', clear: 'مسح القسم', exportLibrary: 'تصدير المكتبة', importLibrary: 'استيراد المكتبة', backupImported: 'تم استيراد المكتبة بنجاح.', invalidBackup: 'هذا الملف ليس نسخة PeakFlix صالحة.',
+  markWatched: 'تحديد كمُشاهد', markUnwatched: 'إلغاء علامة المشاهدة', clearConfirm: 'هل تريد مسح كل محتوى هذا القسم؟',
+  seriesPlayer: 'مشغل المسلسل', moviePlayer: 'مشغل الفيلم', progressSaved: 'التقدم محفوظ محليًا', chooseServer: 'اختر السيرفر:', streamingServers: 'خوادم المشاهدة', backDetails: 'العودة للتفاصيل', season: 'الموسم', episode: 'الحلقة', previousEpisode: 'الحلقة السابقة', nextEpisode: 'الحلقة التالية', loadingEpisodes: 'جاري تحميل الحلقات…', moreLikeThis: 'اقتراحات مشابهة',
+  about: 'عن الموقع', privacy: 'الخصوصية', disclaimer: 'إخلاء المسؤولية', installApp: 'تثبيت التطبيق', updateAvailable: 'نسخة جديدة من PeakFlix جاهزة.', refresh: 'تحديث',
+  aboutTitle: 'عن PeakFlix', aboutBody: 'PeakFlix تجربة طلابية لاكتشاف الأفلام والمسلسلات والأنمي والدراما الكورية والمسلسلات التركية.',
+  privacyTitle: 'الخصوصية', privacyBody: 'لا يملك PeakFlix حسابات أو قاعدة بيانات. تبقى المفضلة والسجل وعمليات البحث وتقدم المشاهدة داخل متصفحك، ويؤدي مسح بيانات الموقع إلى حذفها.',
+  disclaimerTitle: 'إخلاء المسؤولية', disclaimerBody: 'لا يستضيف PeakFlix ملفات الوسائط. التوفر والمشغلات الخارجية مقدمة لأغراض العرض وتبقى مسؤولية مزوديها.',
+  tmdbAttribution: 'يستخدم هذا المنتج واجهة TMDB، لكنه غير معتمد أو مصدّق من TMDB.', allRights: 'مشروع تجريبي وترفيهي.',
+  somethingWrong: 'حدث خطأ', unexpectedError: 'واجهت الصفحة خطأ غير متوقع. يمكنك العودة للرئيسية والمحاولة مجددًا بأمان.', backHome: 'العودة للرئيسية',
+  navigation: 'التنقل الرئيسي', openMenu: 'فتح القائمة', closeMenu: 'إغلاق القائمة', language: 'اللغة', skipContent: 'انتقل إلى المحتوى', slide: 'الانتقال إلى الشريحة {{number}}', previousSlide: 'العنوان السابق', nextSlide: 'العنوان التالي',
+};
+
+const saved = localStorage.getItem('peakflix-language');
+const browserLanguage = navigator.language?.toLowerCase().startsWith('ar') ? 'ar' : 'en';
+const initialLanguage = saved === 'ar' || saved === 'en' ? saved : browserLanguage;
+
+i18n.use(initReactI18next).init({
+  resources: { en: { translation: en }, ar: { translation: ar } },
+  lng: initialLanguage,
+  fallbackLng: 'en',
+  supportedLngs: ['en', 'ar'],
   interpolation: { escapeValue: false },
-  supportedLngs: ['en', 'ar', 'es', 'ja', 'fr', 'it', 'de']
 });
 
 export default i18n;

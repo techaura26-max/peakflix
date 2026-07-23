@@ -25,3 +25,11 @@ export function saveRecentSearch(term: string) {
     // Search history is optional; the website still works if browser storage is unavailable.
   }
 }
+
+export function clearRecentSearches() {
+  try {
+    localStorage.removeItem(SEARCH_HISTORY_KEY);
+  } catch {
+    // Search history is optional.
+  }
+}

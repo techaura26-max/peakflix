@@ -74,10 +74,10 @@ export function Hero({ items, compact = false }: { items: MediaItem[]; compact?:
       {items.length > 1 && (
         <div className="hero-controls">
           <div className="hero-nav">
-            <button type="button" className="hero-arrow" onClick={goPrev}>
+            <button type="button" className="hero-arrow" aria-label={t('previousSlide')} onClick={goPrev}>
               <ChevronLeft size={18} />
             </button>
-            <button type="button" className="hero-arrow" onClick={goNext}>
+            <button type="button" className="hero-arrow" aria-label={t('nextSlide')} onClick={goNext}>
               <ChevronRight size={18} />
             </button>
           </div>
@@ -88,7 +88,7 @@ export function Hero({ items, compact = false }: { items: MediaItem[]; compact?:
                 type="button"
                 className={`hero-dot ${index === activeIndex ? 'active' : ''}`}
                 onClick={() => goTo(index)}
-                aria-label={`Go to ${index + 1}`}
+                aria-label={t('slide', { number: index + 1 })}
               />
             ))}
           </div>

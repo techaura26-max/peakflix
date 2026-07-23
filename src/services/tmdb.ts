@@ -1,12 +1,14 @@
 import type { MediaEpisode, MediaItem, MediaSeason, MediaType } from '../types/media';
+import { rankSearchSuggestions } from '../utils/searchRanking';
+import i18n from '../i18n';
 
 const API = 'https://api.themoviedb.org/3';
 const IMG = 'https://image.tmdb.org/t/p';
 const token = import.meta.env.VITE_TMDB_READ_TOKEN as string | undefined;
 const MEMORY_CACHE = new Map<string, CacheEntry>();
 const IN_FLIGHT = new Map<string, Promise<any>>();
-const CACHE_PREFIX = 'peakflix-tmdb-v3:';
-const MAX_SESSION_ENTRIES = 70;
+const CACHE_PREFIX = 'peakflix-tmdb-v4:';
+const MAX_BROWSER_ENTRIES = 45;
 const STALE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 interface CacheEntry<T = any> {
@@ -45,11 +47,11 @@ function cacheTtl(path: string) {
   return 3 * 60 * 60 * 1000;
 }
 
-function readSessionCache(key: string): CacheEntry | undefined {
+function readBrowserCache(key: string): CacheEntry | undefined {
   try {
-    const parsed = JSON.parse(sessionStorage.getItem(`${CACHE_PREFIX}${key}`) || 'null') as CacheEntry | null;
+    const parsed = JSON.parse(localStorage.getItem(`${CACHE_PREFIX}${key}`) || 'null') as CacheEntry | null;
     if (!parsed || parsed.staleUntil <= Date.now()) {
-      sessionStorage.removeItem(`${CACHE_PREFIX}${key}`);
+      localStorage.removeItem(`${CACHE_PREFIX}${key}`);
       return undefined;
     }
     return parsed;
@@ -58,20 +60,20 @@ function readSessionCache(key: string): CacheEntry | undefined {
   }
 }
 
-function trimSessionCache() {
+function trimBrowserCache(maxEntries = MAX_BROWSER_ENTRIES) {
   try {
     const entries: Array<{ key: string; savedAt: number }> = [];
-    for (let index = 0; index < sessionStorage.length; index += 1) {
-      const key = sessionStorage.key(index);
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
       if (!key?.startsWith(CACHE_PREFIX)) continue;
       try {
-        const value = JSON.parse(sessionStorage.getItem(key) || 'null') as CacheEntry | null;
+        const value = JSON.parse(localStorage.getItem(key) || 'null') as CacheEntry | null;
         entries.push({ key, savedAt: value?.savedAt || 0 });
       } catch {
         entries.push({ key, savedAt: 0 });
       }
     }
-    entries.sort((a, b) => b.savedAt - a.savedAt).slice(MAX_SESSION_ENTRIES).forEach(({ key }) => sessionStorage.removeItem(key));
+    entries.sort((a, b) => b.savedAt - a.savedAt).slice(maxEntries).forEach(({ key }) => localStorage.removeItem(key));
   } catch {
     // Caching is an optimization; storage failures should never break content loading.
   }
@@ -82,15 +84,20 @@ function saveCache(key: string, value: any, ttl: number) {
   const entry: CacheEntry = { value, savedAt: now, expiresAt: now + ttl, staleUntil: now + ttl + STALE_WINDOW_MS };
   MEMORY_CACHE.set(key, entry);
   try {
-    sessionStorage.setItem(`${CACHE_PREFIX}${key}`, JSON.stringify(entry));
-    trimSessionCache();
+    localStorage.setItem(`${CACHE_PREFIX}${key}`, JSON.stringify(entry));
+    trimBrowserCache();
   } catch {
-    // Large TMDB payloads can exceed a browser quota; the memory cache remains available.
+    try {
+      trimBrowserCache(18);
+      localStorage.setItem(`${CACHE_PREFIX}${key}`, JSON.stringify(entry));
+    } catch {
+      // Large TMDB payloads can exceed a browser quota; the memory cache remains available.
+    }
   }
 }
 
 function cachedValue(key: string) {
-  const entry = MEMORY_CACHE.get(key) || readSessionCache(key);
+  const entry = MEMORY_CACHE.get(key) || readBrowserCache(key);
   if (entry) MEMORY_CACHE.set(key, entry);
   return entry;
 }
@@ -110,7 +117,7 @@ async function fetchWithRetry(url: URL, signal?: AbortSignal) {
     const retryAfter = Number(response.headers.get('retry-after'));
     await wait(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 350 * 2 ** attempt);
   }
-  throw new Error(`PeakFlix could not load this content right now${lastStatus ? ` (${lastStatus})` : ''}. Please try again later.`);
+  throw new Error(`${i18n.t('offlineError')}${lastStatus ? ` (${lastStatus})` : ''}`);
 }
 
 async function request(
@@ -149,10 +156,11 @@ async function request(
 
 function siteType(tmdbType: 'movie' | 'tv', raw: any, requested?: MediaType): MediaType {
   if (requested) return requested;
-  if (tmdbType === 'movie') return raw.original_language === 'ko' ? 'turkish-drama' : 'movie';
+  if (tmdbType === 'movie') return 'movie';
   const genres = raw.genre_ids || raw.genres?.map((genre: any) => genre.id) || [];
   if (genres.includes(16)) return 'anime';
   if (raw.original_language === 'tr') return 'turkish-series';
+  if (raw.original_language === 'ko') return 'korean-drama';
   return 'series';
 }
 
@@ -165,8 +173,8 @@ function mapBasic(raw: any, tmdbType: 'movie' | 'tv', requested?: MediaType): Me
     type: siteType(tmdbType, raw, requested),
     title: raw.title || raw.name || 'Untitled',
     titleAr: raw.title || raw.name || 'بدون عنوان',
-    description: raw.overview || 'No description available.',
-    descriptionAr: raw.overview || 'لا يوجد وصف متاح.',
+    description: raw.overview || i18n.t('noDescription'),
+    descriptionAr: raw.overview || i18n.t('noDescription'),
     year: Number(date.slice(0, 4)) || 0,
     rating: Math.round((raw.vote_average || 0) * 10) / 10,
     duration: '',
@@ -174,10 +182,14 @@ function mapBasic(raw: any, tmdbType: 'movie' | 'tv', requested?: MediaType): Me
     genreAr: [],
     genreIds: raw.genre_ids || (raw.genres || []).map((genre: any) => genre.id),
     poster: raw.poster_path ? `${IMG}/w500${raw.poster_path}` : '',
-    backdrop: raw.backdrop_path ? `${IMG}/original${raw.backdrop_path}` : raw.poster_path ? `${IMG}/original${raw.poster_path}` : '',
+    backdrop: raw.backdrop_path ? `${IMG}/w1280${raw.backdrop_path}` : raw.poster_path ? `${IMG}/w780${raw.poster_path}` : '',
     trailer: '',
     video: '',
     trending: true,
+    popularity: raw.popularity || 0,
+    voteCount: raw.vote_count || 0,
+    originalLanguage: raw.original_language || '',
+    originalTitle: raw.original_title || raw.original_name || '',
   };
 }
 
@@ -207,7 +219,7 @@ export async function getCategory(type: MediaType, page = 1): Promise<{ items: M
   if (type === 'series') { path = '/discover/tv'; tmdbType = 'tv'; params.without_genres = 16; }
   if (type === 'anime') { path = '/discover/tv'; tmdbType = 'tv'; params.with_genres = 16; }
   if (type === 'turkish-series') { path = '/discover/tv'; tmdbType = 'tv'; params.with_original_language = 'tr'; }
-  if (type === 'turkish-drama') { path = '/discover/movie'; params.with_original_language = 'ko'; }
+  if (type === 'korean-drama') { path = '/discover/tv'; tmdbType = 'tv'; params.with_original_language = 'ko'; }
   const data = await request(path, params);
   const mapped = data.results.filter((item: any) => item.poster_path).map((item: any) => mapBasic(item, tmdbType, type));
   return { items: mapped, featured: mapped.slice(0, 10), totalPages: Math.min(data.total_pages || 1, 500) };
@@ -222,23 +234,17 @@ export async function searchTitles(query: string, page = 1): Promise<{ items: Me
 }
 
 export async function searchTitleSuggestions(query: string, limit = 7): Promise<MediaItem[]> {
-  const normalized = query.trim().toLocaleLowerCase();
+  const normalized = query.trim();
   if (!normalized) return [];
-  const { items } = await searchTitles(normalized, 1);
-  return items
-    .sort((a, b) => {
-      const aPrefix = a.title.toLocaleLowerCase().startsWith(normalized) ? 1 : 0;
-      const bPrefix = b.title.toLocaleLowerCase().startsWith(normalized) ? 1 : 0;
-      return bPrefix - aPrefix || b.rating - a.rating || b.year - a.year;
-    })
-    .slice(0, limit);
+  const [first, second] = await Promise.all([searchTitles(normalized, 1), searchTitles(normalized, 2)]);
+  return rankSearchSuggestions([...first.items, ...second.items], normalized, limit);
 }
 
 export async function getDetails(id: string): Promise<MediaItem> {
   const [tmdbType, rawId] = id.split('-') as ['movie' | 'tv', string];
-  if ((tmdbType !== 'movie' && tmdbType !== 'tv') || !/^\d+$/.test(rawId)) throw new Error('This title link is invalid.');
+  if ((tmdbType !== 'movie' && tmdbType !== 'tv') || !/^\d+$/.test(rawId)) throw new Error(i18n.t('noResults'));
   const [main, arabic] = await Promise.all([
-    request(`/${tmdbType}/${rawId}`, { language: getCurrentLanguage(), append_to_response: 'watch/providers,videos' }),
+    request(`/${tmdbType}/${rawId}`, { language: getCurrentLanguage(), append_to_response: 'watch/providers,videos,credits,release_dates,content_ratings' }),
     request(`/${tmdbType}/${rawId}`, { language: 'ar' }),
   ]);
   const region = main['watch/providers']?.results?.JO || main['watch/providers']?.results?.US;
@@ -250,12 +256,20 @@ export async function getDetails(id: string): Promise<MediaItem> {
     || main.videos?.results?.find((video: any) => video.site === 'YouTube' && video.type === 'Trailer');
   const runtime = tmdbType === 'movie' ? main.runtime : main.episode_run_time?.[0];
   const date = main.release_date || main.first_air_date || '';
+  const releaseRegion = main.release_dates?.results?.find((value: any) => value.iso_3166_1 === 'JO')
+    || main.release_dates?.results?.find((value: any) => value.iso_3166_1 === 'US');
+  const movieCertification = releaseRegion?.release_dates?.find((value: any) => value.certification)?.certification;
+  const tvCertification = main.content_ratings?.results?.find((value: any) => value.iso_3166_1 === 'JO')?.rating
+    || main.content_ratings?.results?.find((value: any) => value.iso_3166_1 === 'US')?.rating;
+  const directorNames = tmdbType === 'movie'
+    ? (main.credits?.crew || []).filter((person: any) => person.job === 'Director').map((person: any) => person.name)
+    : (main.created_by || []).map((person: any) => person.name);
   return {
     ...mapBasic(main, tmdbType),
     titleAr: arabic.title || arabic.name || main.title || main.name,
     descriptionAr: arabic.overview || main.overview || 'لا يوجد وصف متاح.',
     year: Number(date.slice(0, 4)) || 0,
-    duration: runtime ? `${Math.floor(runtime / 60)}h ${String(runtime % 60).padStart(2, '0')}m` : main.number_of_seasons ? `${main.number_of_seasons} Seasons` : '',
+    duration: runtime ? `${Math.floor(runtime / 60)}h ${String(runtime % 60).padStart(2, '0')}m` : '',
     genre: (main.genres || []).map((genre: any) => genre.name),
     genreAr: (arabic.genres || []).map((genre: any) => genre.name),
     genreIds: (main.genres || []).map((genre: any) => genre.id),
@@ -267,7 +281,23 @@ export async function getDetails(id: string): Promise<MediaItem> {
     providerLink: region?.link || `https://www.themoviedb.org/${tmdbType}/${main.id}/watch`,
     homepage: main.homepage || '',
     status: main.status || '',
+    tagline: main.tagline || '',
+    runtimeMinutes: runtime || undefined,
+    certification: movieCertification || tvCertification || '',
+    trailerKey: trailer?.key || '',
+    cast: (main.credits?.cast || []).slice(0, 12).map((person: any) => ({
+      id: person.id,
+      name: person.name,
+      role: person.character || person.known_for_department || '',
+      photo: person.profile_path ? `${IMG}/w185${person.profile_path}` : '',
+    })),
+    directors: [...new Set<string>(directorNames)].slice(0, 4),
   };
+}
+
+export async function getGenres(tmdbType: 'movie' | 'tv') {
+  const data = await request(`/genre/${tmdbType}/list`, { language: getCurrentLanguage() });
+  return (data.genres || []) as Array<{ id: number; name: string }>;
 }
 
 export async function getSeasonEpisodes(tvId: number | string, season: number): Promise<MediaEpisode[]> {

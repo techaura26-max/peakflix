@@ -5,6 +5,8 @@ import { DetailsPage } from './pages/DetailsPage';
 import { HomePage } from './pages/HomePage';
 import { SearchPage } from './pages/SearchPage';
 import { WatchPage } from './pages/WatchPage';
+import { LibraryPage } from './pages/LibraryPage';
+import { LegalPage } from './pages/LegalPage';
 
 export default function App() {
   return (
@@ -15,6 +17,11 @@ export default function App() {
         <Route path="/search" element={<SearchPage />} />
         <Route path="/title/:id" element={<DetailsPage />} />
         <Route path="/watch/:id" element={<WatchPage />} />
+        <Route path="/library" element={<LibraryPage />} />
+        <Route path="/about" element={<LegalPage kind="about" />} />
+        <Route path="/privacy" element={<LegalPage kind="privacy" />} />
+        <Route path="/disclaimer" element={<LegalPage kind="disclaimer" />} />
+        <Route path="/category/turkish-drama" element={<Navigate to="/category/korean-drama" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
