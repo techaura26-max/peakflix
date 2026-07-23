@@ -1,6 +1,7 @@
 import type { MediaEpisode, MediaItem, MediaSeason, MediaType } from '../types/media';
 import { rankSearchSuggestions } from '../utils/searchRanking';
 import i18n from '../i18n';
+import { detectQueryLocale, getPreferredLanguage, getTmdbLocale, normalizeLanguage } from '../i18n/languages';
 
 const API = 'https://api.themoviedb.org/3';
 const IMG = 'https://image.tmdb.org/t/p';
@@ -29,13 +30,13 @@ function authHeaders(): HeadersInit {
 }
 
 function getCurrentLanguage(): string {
-  const stored = localStorage.getItem('peakflix-language');
-  const browserLang = typeof navigator !== 'undefined' ? navigator.language?.split('-')[0] : '';
-  const lang = stored || i18n.resolvedLanguage || browserLang || 'en';
-  const langMap: Record<string, string> = {
-    ar: 'ar-SA', en: 'en-US', fr: 'fr-FR', es: 'es-ES', ja: 'ja-JP', it: 'it-IT', de: 'de-DE',
-  };
-  return langMap[lang] || 'en-US';
+  const stored = typeof localStorage !== 'undefined' ? localStorage.getItem('peakflix-language') : null;
+  return getTmdbLocale(stored || i18n.resolvedLanguage || getPreferredLanguage());
+}
+
+function getCurrentLanguageCode() {
+  const stored = typeof localStorage !== 'undefined' ? localStorage.getItem('peakflix-language') : null;
+  return normalizeLanguage(stored || i18n.resolvedLanguage || getPreferredLanguage());
 }
 
 function cacheTtl(path: string) {
@@ -166,13 +167,17 @@ function siteType(tmdbType: 'movie' | 'tv', raw: any, requested?: MediaType): Me
 
 function mapBasic(raw: any, tmdbType: 'movie' | 'tv', requested?: MediaType): MediaItem {
   const date = raw.release_date || raw.first_air_date || '';
+  const localizedTitle = raw.title || raw.name || i18n.t('noResults');
   return {
     id: `${tmdbType}-${raw.id}`,
     tmdbId: raw.id,
     tmdbType,
     type: siteType(tmdbType, raw, requested),
-    title: raw.title || raw.name || 'Untitled',
-    titleAr: raw.title || raw.name || 'بدون عنوان',
+    title: localizedTitle,
+    titleAr: localizedTitle,
+    localizedTitle,
+    localizedDescription: raw.overview || i18n.t('noDescription'),
+    localizedLanguage: getCurrentLanguageCode(),
     description: raw.overview || i18n.t('noDescription'),
     descriptionAr: raw.overview || i18n.t('noDescription'),
     year: Number(date.slice(0, 4)) || 0,
@@ -239,6 +244,9 @@ function localizedSearchItem(
     ...item,
     title: englishTitle || item.title,
     titleAr: arabicTitle || item.title,
+    localizedTitle: active?.title || active?.name || englishTitle || arabicTitle || item.title,
+    localizedDescription: active?.overview || english?.overview || arabic?.overview || item.description,
+    localizedLanguage: getCurrentLanguageCode(),
     description: english?.overview || item.description,
     descriptionAr: arabic?.overview || item.description,
     originalTitle: english?.original_title || english?.original_name || base.original_title || base.original_name || '',
@@ -249,7 +257,7 @@ export async function searchTitles(query: string, page = 1): Promise<{ items: Me
   const normalized = query.trim();
   if (!normalized) return { items: [], totalPages: 1 };
   const currentLanguage = getCurrentLanguage();
-  const languages = [...new Set([currentLanguage, 'en-US', 'ar-SA'])];
+  const languages = [...new Set([currentLanguage, detectQueryLocale(normalized), 'en-US', 'ar-SA'].filter(Boolean))] as string[];
   const loadGroups = async (searchQuery: string, searchPage: number) => {
     const results = await Promise.allSettled(languages.map(async (language) => ({
       language,
@@ -318,9 +326,14 @@ export async function searchTitleSuggestions(query: string, limit = 7): Promise<
 export async function getDetails(id: string): Promise<MediaItem> {
   const [tmdbType, rawId] = id.split('-') as ['movie' | 'tv', string];
   if ((tmdbType !== 'movie' && tmdbType !== 'tv') || !/^\d+$/.test(rawId)) throw new Error(i18n.t('noResults'));
-  const [main, arabic] = await Promise.all([
-    request(`/${tmdbType}/${rawId}`, { language: getCurrentLanguage(), append_to_response: 'watch/providers,videos,credits,release_dates,content_ratings' }),
-    request(`/${tmdbType}/${rawId}`, { language: 'ar' }),
+  const currentLanguage = getCurrentLanguage();
+  const main = await request(`/${tmdbType}/${rawId}`, {
+    language: currentLanguage,
+    append_to_response: 'watch/providers,videos,credits,release_dates,content_ratings',
+  });
+  const [english, arabic] = await Promise.all([
+    currentLanguage === 'en-US' ? main : request(`/${tmdbType}/${rawId}`, { language: 'en-US' }),
+    currentLanguage === 'ar-SA' ? main : request(`/${tmdbType}/${rawId}`, { language: 'ar-SA' }),
   ]);
   const region = main['watch/providers']?.results?.JO || main['watch/providers']?.results?.US;
   const providerKinds = ['flatrate', 'free', 'ads', 'rent', 'buy'];
@@ -340,9 +353,12 @@ export async function getDetails(id: string): Promise<MediaItem> {
     ? (main.credits?.crew || []).filter((person: any) => person.job === 'Director').map((person: any) => person.name)
     : (main.created_by || []).map((person: any) => person.name);
   return {
-    ...mapBasic(main, tmdbType),
+    ...mapBasic(english || main, tmdbType),
+    localizedTitle: main.title || main.name || english.title || english.name,
+    localizedDescription: main.overview || english.overview || i18n.t('noDescription'),
+    localizedLanguage: getCurrentLanguageCode(),
     titleAr: arabic.title || arabic.name || main.title || main.name,
-    descriptionAr: arabic.overview || main.overview || 'لا يوجد وصف متاح.',
+    descriptionAr: arabic.overview || main.overview || i18n.t('noDescription', { lng: 'ar' }),
     year: Number(date.slice(0, 4)) || 0,
     duration: runtime ? `${Math.floor(runtime / 60)}h ${String(runtime % 60).padStart(2, '0')}m` : '',
     genre: (main.genres || []).map((genre: any) => genre.name),

@@ -76,6 +76,8 @@ function toLibraryEntry(item: MediaItem, previous?: LibraryEntry): LibraryEntry 
     id: item.id,
     title: item.title,
     titleAr: item.titleAr,
+    localizedTitle: item.localizedTitle,
+    localizedLanguage: item.localizedLanguage,
     poster: item.poster,
     backdrop: item.backdrop,
     rating: item.rating,

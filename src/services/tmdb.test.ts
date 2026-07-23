@@ -74,4 +74,28 @@ describe('multilingual resilient TMDB search', () => {
     const result = await searchTitles('Breking Bad');
     expect(result.items[0].title).toBe('Breaking Bad');
   });
+
+  it('queries the selected locale and the script detected in another language', async () => {
+    localStorage.setItem('peakflix-language', 'hi');
+    const requestedLanguages: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: URL) => {
+      const language = input.searchParams.get('language') || '';
+      requestedLanguages.push(language);
+      return response([{
+        id: 438631,
+        media_type: 'movie',
+        title: language === 'hi-IN' ? 'ड्यून' : language === 'ja-JP' ? 'DUNE/デューン 砂の惑星' : 'Dune',
+        overview: 'Description',
+        poster_path: '/dune.jpg',
+        release_date: '2021-09-15',
+        vote_average: 7.8,
+        vote_count: 12000,
+        popularity: 200,
+      }]);
+    }));
+    const { searchTitles } = await import('./tmdb');
+    const result = await searchTitles('デューン');
+    expect(new Set(requestedLanguages)).toEqual(new Set(['hi-IN', 'ja-JP', 'en-US', 'ar-SA']));
+    expect(result.items[0]).toMatchObject({ title: 'Dune', localizedTitle: 'ड्यून', localizedLanguage: 'hi' });
+  });
 });

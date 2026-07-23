@@ -1,14 +1,15 @@
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, Outlet } from 'react-router-dom';
+import { isRtlLanguage, normalizeLanguage } from '../i18n/languages';
 import { BrandMark } from './BrandMark';
 import { Navbar } from './Navbar';
 import { PwaControls } from './PwaControls';
 
 export function Layout() {
   const { t, i18n } = useTranslation();
-  const language = i18n.resolvedLanguage === 'ar' ? 'ar' : 'en';
-  const direction = language === 'ar' ? 'rtl' : 'ltr';
+  const language = normalizeLanguage(i18n.resolvedLanguage);
+  const direction = isRtlLanguage(language) ? 'rtl' : 'ltr';
 
   useEffect(() => {
     document.documentElement.lang = language;

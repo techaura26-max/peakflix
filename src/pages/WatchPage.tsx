@@ -17,6 +17,7 @@ import {
 import { ErrorState, LoadingState } from '../components/PageState';
 import { Seo } from '../components/Seo';
 import { parsePlayerProgressMessage } from '../utils/playback';
+import { isRtlLanguage } from '../i18n/languages';
 
 export const STREAMING_SERVERS = ['VidSrcPM', 'VidSrc', 'SmashyStream', 'MultiEmbed'] as const;
 type ServerName = typeof STREAMING_SERVERS[number];
@@ -51,7 +52,7 @@ export function WatchPage() {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const lastPlayerSave = useRef(0);
   const language = i18n.resolvedLanguage || localStorage.getItem('peakflix-language') || 'en';
-  const ar = language === 'ar';
+  const rtl = isRtlLanguage(language);
   const isTv = item?.tmdbType === 'tv' || id.startsWith('tv-');
 
   useEffect(() => {
@@ -156,7 +157,7 @@ export function WatchPage() {
   if (error || !item) return <div className="page-shell"><ErrorState message={error} onRetry={() => setAttempt((value) => value + 1)} /></div>;
 
   return (
-    <div className="watch-page" dir={ar ? 'rtl' : 'ltr'}>
+    <div className="watch-page" dir={rtl ? 'rtl' : 'ltr'}>
       <Seo title={`${title(item)} · ${t('play')}`} description={item.description} image={item.backdrop} />
       <div className="watch-top">
         <Link to={`/title/${id}`} aria-label={t('backDetails')}><ArrowLeft /></Link>

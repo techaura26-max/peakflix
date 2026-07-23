@@ -10,6 +10,7 @@ import { getGenres, searchTitles } from '../services/tmdb';
 import type { MediaItem } from '../types/media';
 import { clearRecentSearches, getRecentSearches, saveRecentSearch } from '../utils/searchHistory';
 import { rankSearchSuggestions } from '../utils/searchRanking';
+import { LANGUAGE_OPTIONS, normalizeLanguage } from '../i18n/languages';
 
 const suggestionSeeds = ['Dune', 'Breaking Bad', 'One Piece', 'The Dark Knight', 'The Last of Us'];
 type SortMode = 'relevant' | 'popular' | 'rating' | 'newest';
@@ -32,7 +33,7 @@ export function SearchPage() {
   const [minimumRating, setMinimumRating] = useState('0');
   const [sort, setSort] = useState<SortMode>('relevant');
   const term = params.get('q') || '';
-  const currentLang = i18n.resolvedLanguage || 'en';
+  const currentLang = normalizeLanguage(i18n.resolvedLanguage);
 
   useEffect(() => {
     Promise.all([getGenres('movie'), getGenres('tv')])
@@ -117,7 +118,10 @@ export function SearchPage() {
           <div className="filter-heading"><SlidersHorizontal size={18} /><strong>{t('filters')}</strong><button type="button" onClick={resetFilters}>{t('clearFilters')}</button></div>
           <label><span>{t('mediaType')}</span><select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as typeof typeFilter)}><option value="all">{t('allTypes')}</option><option value="movie">{t('movie')}</option><option value="tv">{t('tvSeries')}</option></select></label>
           <label><span>{t('genre')}</span><select value={genreFilter} onChange={(event) => setGenreFilter(event.target.value)}><option value="all">{t('allGenres')}</option>{genres.map((genre) => <option key={genre.id} value={genre.id}>{genre.name}</option>)}</select></label>
-          <label><span>{t('originalLanguage')}</span><select value={languageFilter} onChange={(event) => setLanguageFilter(event.target.value)}><option value="all">{t('allLanguages')}</option>{['en', 'ko', 'ja', 'tr', 'ar', 'hi', 'es', 'fr'].map((code) => <option key={code} value={code}>{new Intl.DisplayNames([currentLang], { type: 'language' }).of(code) || code.toUpperCase()}</option>)}</select></label>
+          <label><span>{t('originalLanguage')}</span><select value={languageFilter} onChange={(event) => setLanguageFilter(event.target.value)}><option value="all">{t('allLanguages')}</option>{LANGUAGE_OPTIONS.map(({ code }) => {
+            const mediaCode = code === 'fil' ? 'tl' : code;
+            return <option key={code} value={mediaCode}>{new Intl.DisplayNames([currentLang], { type: 'language' }).of(code) || code.toUpperCase()}</option>;
+          })}</select></label>
           <label><span>{t('year')}</span><select value={yearFilter} onChange={(event) => setYearFilter(event.target.value)}><option value="all">{t('anyYear')}</option>{Array.from({ length: 77 }, (_, index) => new Date().getFullYear() - index).map((year) => <option key={year} value={year}>{year}</option>)}</select></label>
           <label><span>{t('minimumRating')}</span><select value={minimumRating} onChange={(event) => setMinimumRating(event.target.value)}><option value="0">{t('anyRating')}</option>{[5, 6, 7, 8, 9].map((rating) => <option key={rating} value={rating}>{rating}+</option>)}</select></label>
           <label><span>{t('sortBy')}</span><select value={sort} onChange={(event) => setSort(event.target.value as SortMode)}><option value="relevant">{t('mostRelevant')}</option><option value="popular">{t('mostPopular')}</option><option value="rating">{t('highestRated')}</option><option value="newest">{t('newest')}</option></select></label>

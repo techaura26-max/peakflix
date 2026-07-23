@@ -1362,7 +1362,10 @@ select {
   position: absolute;
   top: calc(100% + 8px);
   inset-inline-end: 0;
-  width: 150px;
+  width: 210px;
+  max-height: min(68vh, 560px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   display: grid;
   gap: 4px;
   padding: 7px;
@@ -1378,6 +1381,7 @@ select {
   background: transparent;
   color: #fff;
   text-align: start;
+  font: inherit;
 }
 .lang-menu button:hover,
 .lang-menu button[aria-checked="true"] { background: #8b5cf633; color: #c4b5fd; }

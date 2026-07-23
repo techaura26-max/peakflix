@@ -12,7 +12,8 @@ PeakFlix is a production-style React and TypeScript media discovery website powe
 - Browser-only library with favorites, watch later, history, watched titles, exact player progress when provided, export, and import
 - Previous/next episode navigation across season boundaries and VidSrcPM as the first player option
 - Installable PWA with an offline shell, persistent TMDB cache, update notices, responsive navigation, and reduced-motion support
-- English and Arabic interfaces; each visitor sees one selected language, saved in the browser
+- 22 complete interface languages, alphabetically organized; each visitor sees one selected language, saved in the browser
+- Multilingual TMDB search with script detection for Arabic, Persian, Chinese, Japanese, Korean, Russian, Hindi, Bengali, Punjabi, Tamil, and Thai queries
 - SEO metadata, structured movie/TV data, legal pages, TMDB attribution, error boundaries, and automated tests
 
 ## Run locally or in Codespaces

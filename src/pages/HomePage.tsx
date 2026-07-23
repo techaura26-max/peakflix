@@ -16,6 +16,8 @@ function entryToMedia(entry: ReturnType<typeof getLibrary>[number]): MediaItem {
     id: entry.id,
     title: entry.title,
     titleAr: entry.titleAr,
+    localizedTitle: entry.localizedTitle,
+    localizedLanguage: entry.localizedLanguage,
     description: '',
     descriptionAr: '',
     year: entry.year,
