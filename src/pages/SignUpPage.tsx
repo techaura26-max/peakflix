@@ -5,6 +5,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { getSecurityQuestions, signUp } from '../services/authApi';
 import { useAuth } from '../context/AuthContext';
 import { COUNTRIES } from '../data/countries';
+import { DEFAULT_SECURITY_QUESTIONS, type SecurityQuestion } from '../data/securityQuestions';
 
 export function SignUpPage() {
   const { t } = useTranslation();
@@ -15,15 +16,19 @@ export function SignUpPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [query, setQuery] = useState('');
-  const [questions, setQuestions] = useState<Array<{ id: number; question: string }>>([]);
+  const [questions, setQuestions] = useState<SecurityQuestion[]>(DEFAULT_SECURITY_QUESTIONS);
+  const [questionsWarning, setQuestionsWarning] = useState('');
 
   useEffect(() => {
     getSecurityQuestions().then((result) => {
       if (Array.isArray(result.items) && result.items.length) {
-        const nextQuestions = (result.items as Array<{ id: number; question: string }>);
+        const nextQuestions = (result.items as SecurityQuestion[]).filter((item) => Number.isInteger(item.id) && item.question);
         setQuestions(nextQuestions);
+        setForm((current) => nextQuestions.some((item) => String(item.id) === current.securityQuestionId)
+          ? current
+          : { ...current, securityQuestionId: String(nextQuestions[0].id) });
       }
-    }).catch(() => undefined);
+    }).catch(() => setQuestionsWarning('The database is not connected yet. Showing the built-in question list for preview.'));
   }, []);
 
   const countries = useMemo(() => COUNTRIES.filter((country) => country.toLowerCase().includes(query.toLowerCase()) || !query), [query]);
@@ -53,6 +58,7 @@ export function SignUpPage() {
         <h1>Create your account</h1>
         <p>Join PeakFlix and sync your favorites, watch history, and custom lists.</p>
         {error ? <p className="error">{error}</p> : null}
+        {questionsWarning ? <p className="muted">{questionsWarning}</p> : null}
         {success ? <p className="success">{success}</p> : null}
         <label>
           <span>{t('username') || 'Username'}</span>
@@ -80,7 +86,7 @@ export function SignUpPage() {
         <label>
           <span>Security Question</span>
           <div><HelpCircle size={18} /><select value={form.securityQuestionId} onChange={(e) => setForm({ ...form, securityQuestionId: e.target.value })}>
-            {questions.length ? questions.map((question) => <option key={question.id} value={question.id}>{question.question}</option>) : <option value="1">What was the name of your first pet?</option>}
+            {questions.map((question) => <option key={question.id} value={question.id}>{question.question}</option>)}
           </select></div>
         </label>
         <label>

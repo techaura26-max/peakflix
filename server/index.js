@@ -5,7 +5,8 @@ import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
-import { query, healthCheck, withTransaction } from './db.js';
+import { pathToFileURL } from 'node:url';
+import { query, healthCheck, withTransaction, closePool } from './db.js';
 import { normalizeEmail, normalizeUsername, normalizeSecurityAnswer, normalizeSearchText, normalizeMediaType, validateIdentifier, validatePassword } from './validation.js';
 
 dotenv.config();
@@ -13,6 +14,11 @@ dotenv.config();
 const PORT = Number(process.env.PORT || 3000);
 const BCRYPT_ROUNDS = Number(process.env.BCRYPT_ROUNDS || 12);
 const COOKIE_NAME = 'peakflix-session';
+const MAX_SYNC_ITEMS = 100;
+const MAX_LIBRARY_RESULTS = 100;
+const MAX_LISTS_PER_USER = 50;
+const MAX_ITEMS_PER_LIST = 500;
+const SUPPORTED_LANGUAGES = new Set(['en', 'ar', 'es', 'ja', 'it', 'de', 'fr']);
 
 export function createApp(deps = {}) {
   const requiredEnv = ['DATABASE_URL', 'JWT_SECRET', 'PASSWORD_RESET_SECRET', 'FRONTEND_URL'];
@@ -24,6 +30,7 @@ export function createApp(deps = {}) {
   const JWT_SECRET = process.env.JWT_SECRET;
   const PASSWORD_RESET_SECRET = process.env.PASSWORD_RESET_SECRET;
   const FRONTEND_URL = process.env.FRONTEND_URL;
+  const allowedOrigins = new Set([FRONTEND_URL, 'http://localhost:5173', 'http://127.0.0.1:5173']);
 
   const app = express();
   const queryFn = deps.query || query;
@@ -31,8 +38,21 @@ export function createApp(deps = {}) {
   const transactionFn = deps.withTransaction || withTransaction;
 
   app.use(helmet());
-  app.use(cors({ origin: [FRONTEND_URL, 'http://localhost:5173', 'http://127.0.0.1:5173'], credentials: true }));
+  app.set('trust proxy', 1);
+  app.use(cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.has(origin)) return callback(null, true);
+      return callback(null, false);
+    },
+    credentials: true,
+  }));
   app.use(express.json({ limit: '1mb' }));
+  app.use((req, res, next) => {
+    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+    const origin = req.get('origin');
+    if (origin && !allowedOrigins.has(origin)) return sendError(res, 403, 'Origin is not allowed.');
+    return next();
+  });
 
   const signupLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
   const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 40, standardHeaders: true, legacyHeaders: false });
@@ -57,7 +77,7 @@ export function createApp(deps = {}) {
       return { status: 401, message: 'Invalid or expired token.' };
     }
 
-    if (message === 'Invalid payload.' || message === 'Unsupported library kind.' || message === 'Search text is required.' || message === 'movieId is required.' || message === 'List name is required.' || message === 'List name must be 60 characters or fewer.' || message === 'Invalid media type.' || message === 'Invalid progressSeconds.' || message === 'Invalid durationSeconds.' || message === 'Invalid seasonNumber.' || message === 'Invalid episodeNumber.' || message === 'Unsupported media type.' || message === 'Passwords must match.' || message === 'A reset token and new password are required.' || message === 'Security answer is required.' || message === 'Please provide your email or username.') {
+    if (message === 'Invalid payload.' || message === 'Unsupported library kind.' || message === 'Unsupported language.' || message === 'Search text is required.' || message === 'Search text is too long.' || message === 'movieId is required.' || message === 'Too many items in one sync request.' || message === 'List name is required.' || message === 'List name must be 60 characters or fewer.' || message === 'List limit reached.' || message === 'List item limit reached.' || message === 'Invalid media type.' || message === 'Invalid progressSeconds.' || message === 'Progress cannot be greater than duration.' || message === 'Invalid durationSeconds.' || message === 'Invalid seasonNumber.' || message === 'Invalid episodeNumber.' || message === 'Unsupported media type.' || message === 'Passwords must match.' || message === 'A reset token and new password are required.' || message === 'Security answer is required.' || message === 'Please provide your email or username.') {
       return { status: 400, message };
     }
 
@@ -95,9 +115,9 @@ export function createApp(deps = {}) {
     { expiresIn: '7d' },
   );
 
-  const createRecoveryToken = (user) => jwt.sign({ sub: user.id, purpose: 'security-answer' }, PASSWORD_RESET_SECRET, { expiresIn: '10m' });
+  const createRecoveryToken = (user) => jwt.sign({ sub: user.id, purpose: 'security-answer', sessionVersion: user.session_version }, PASSWORD_RESET_SECRET, { expiresIn: '10m' });
 
-  const createPasswordResetToken = (user) => jwt.sign({ sub: user.id, purpose: 'password-reset' }, PASSWORD_RESET_SECRET, { expiresIn: '10m' });
+  const createPasswordResetToken = (user) => jwt.sign({ sub: user.id, purpose: 'password-reset', sessionVersion: user.session_version }, PASSWORD_RESET_SECRET, { expiresIn: '10m' });
 
   const normalizeUser = (row) => ({
     id: row.id,
@@ -107,20 +127,22 @@ export function createApp(deps = {}) {
     language: row.language,
     security_question_id: row.security_question_id,
     created_at: row.created_at,
-    session_version: row.session_version,
   });
 
   const setAuthCookie = (res, token) => {
+    const production = process.env.NODE_ENV === 'production';
     res.cookie(COOKIE_NAME, token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
+      secure: production,
+      sameSite: production ? 'none' : 'lax',
       maxAge: 1000 * 60 * 60 * 24 * 7,
+      path: '/',
     });
   };
 
   const clearAuthCookie = (res) => {
-    res.clearCookie(COOKIE_NAME, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' });
+    const production = process.env.NODE_ENV === 'production';
+    res.clearCookie(COOKIE_NAME, { httpOnly: true, secure: production, sameSite: production ? 'none' : 'lax', path: '/' });
   };
 
   const getAuthenticatedUser = async (req) => {
@@ -133,9 +155,14 @@ export function createApp(deps = {}) {
     const payload = jwt.verify(token, JWT_SECRET);
     if (payload.purpose !== 'session') throw new Error('Invalid token purpose.');
 
-    const result = await queryFn('select * from users where id = $1 limit 1', [payload.sub]);
+    const result = await queryFn(`
+      select id, username, email, country, language, security_question_id,
+             created_at, session_version, is_active
+      from users where id = $1 limit 1
+    `, [payload.sub]);
     const user = result.rows[0];
     if (!user) throw new Error('Account not found.');
+    if (!user.is_active) throw new Error('Account is inactive.');
     if (payload.sessionVersion !== user.session_version) throw new Error('Session is no longer valid.');
 
     return { payload, user };
@@ -178,7 +205,10 @@ export function createApp(deps = {}) {
       const identifierValidation = validateIdentifier(normalizedEmail);
       if (!identifierValidation.ok) return sendError(res, 400, identifierValidation.error);
       if (trimmedUsername.length < 3 || trimmedUsername.length > 30) return sendError(res, 400, 'Username must be between 3 and 30 characters.');
-      if (String(country).trim().length < 2) return sendError(res, 400, 'Please choose a country.');
+      const normalizedCountry = String(country).trim();
+      const normalizedLanguage = String(language || 'en').trim().toLowerCase();
+      if (normalizedCountry.length < 2 || normalizedCountry.length > 80) return sendError(res, 400, 'Please choose a country.');
+      if (!SUPPORTED_LANGUAGES.has(normalizedLanguage)) return sendError(res, 400, 'Unsupported language.');
       if (!Number.isInteger(Number(securityQuestionId)) || Number(securityQuestionId) <= 0) return sendError(res, 400, 'Please select a valid security question.');
 
       const securityQuestionResult = await queryFn('select id from security_questions where id = $1 and is_active = true limit 1', [Number(securityQuestionId)]);
@@ -198,8 +228,9 @@ export function createApp(deps = {}) {
           username, email, password_hash, country, security_question_id, security_answer_hash, language,
           is_active, email_verified, session_version, password_changed_at, created_at, updated_at
         ) values ($1, $2, $3, $4, $5, $6, $7, true, false, 1, now(), now(), now())
-        returning *
-      `, [trimmedUsername, normalizedEmail, passwordHash, String(country).trim(), Number(securityQuestionId), answerHash, language || 'en']);
+        returning id, username, email, country, language, security_question_id,
+                  created_at, session_version, is_active
+      `, [trimmedUsername, normalizedEmail, passwordHash, normalizedCountry, Number(securityQuestionId), answerHash, normalizedLanguage]);
 
       const user = insertResult.rows[0];
       const token = createToken({ ...user, session_version: user.session_version });
@@ -217,7 +248,13 @@ export function createApp(deps = {}) {
       if (!identifier || !password) return sendError(res, 400, 'Email/username and password are required.');
 
       const normalizedIdentifier = normalizeEmail(normalizeUsername(identifier));
-      const userResult = await queryFn('select * from users where lower(trim(email)) = lower(trim($1)) or lower(trim(username)) = lower(trim($1)) limit 1', [normalizedIdentifier]);
+      const userResult = await queryFn(`
+        select id, username, email, password_hash, country, language,
+               security_question_id, created_at, session_version, is_active
+        from users
+        where lower(trim(email)) = lower(trim($1)) or lower(trim(username)) = lower(trim($1))
+        limit 1
+      `, [normalizedIdentifier]);
       const user = userResult.rows[0];
       if (!user) return sendError(res, 401, 'Invalid credentials.');
 
@@ -225,7 +262,11 @@ export function createApp(deps = {}) {
       if (!match) return sendError(res, 401, 'Invalid credentials.');
       if (!user.is_active) return sendError(res, 403, 'This account is inactive.');
 
-      const updatedUser = await queryFn('update users set last_login_at = now(), updated_at = now() where id = $1 returning *', [user.id]);
+      const updatedUser = await queryFn(`
+        update users set last_login_at = now(), updated_at = now() where id = $1
+        returning id, username, email, country, language, security_question_id,
+                  created_at, session_version, is_active
+      `, [user.id]);
       const activeUser = updatedUser.rows[0] || user;
       const token = createToken({ ...activeUser, session_version: activeUser.session_version });
       setAuthCookie(res, token);
@@ -248,390 +289,5 @@ export function createApp(deps = {}) {
 
       const normalizedIdentifier = normalizeEmail(normalizeUsername(identifier));
       const userResult = await queryFn(`
-        select u.id, u.security_question_id, sq.question, u.is_active
-        from users u
-        join security_questions sq on sq.id = u.security_question_id
-        where lower(u.email) = lower($1) or lower(u.username) = lower($1)
-        limit 1
-      `, [normalizedIdentifier]);
-      const user = userResult.rows[0];
-      if (!user || !user.is_active) {
-        return res.json({ ok: true, message: 'If that account exists, recovery details will be provided.' });
-      }
-
-      const recoveryToken = createRecoveryToken({ id: user.id });
-      return res.json({ ok: true, user: { security_question_id: user.security_question_id, security_question: user.question }, recoveryToken });
-    } catch (error) {
-      const routeError = getRouteError(error);
-      return sendError(res, routeError.status, routeError.message);
-    }
-  });
-
-  app.post('/api/auth/verify-security-answer', async (req, res) => {
-    try {
-      const { recoveryToken, answer } = req.body || {};
-      if (!recoveryToken || !answer) return sendError(res, 400, 'Security answer is required.');
-
-      const payload = jwt.verify(recoveryToken, PASSWORD_RESET_SECRET);
-      if (payload.purpose !== 'security-answer') return sendError(res, 401, 'Invalid or expired recovery session.');
-
-      const userResult = await queryFn('select id, security_answer_hash, is_active from users where id = $1 limit 1', [payload.sub]);
-      const user = userResult.rows[0];
-      if (!user) return sendError(res, 401, 'Invalid or expired recovery session.');
-      if (user.is_active === false) return sendError(res, 401, 'Account is inactive.');
-
-      const normalizedAnswer = normalizeSecurityAnswer(answer);
-      const match = await bcrypt.compare(normalizedAnswer, user.security_answer_hash);
-      if (!match) return sendError(res, 401, 'Invalid or expired recovery session.');
-
-      const passwordResetToken = createPasswordResetToken({ id: user.id });
-      return res.json({ ok: true, passwordResetToken });
-    } catch (error) {
-      const routeError = getRouteError(error);
-      return sendError(res, routeError.status, routeError.message);
-    }
-  });
-
-  app.post('/api/auth/reset-password', async (req, res) => {
-    try {
-      const { passwordResetToken, password, confirmPassword } = req.body || {};
-      if (!passwordResetToken || !password || !confirmPassword) return sendError(res, 400, 'A reset token and new password are required.');
-      if (password !== confirmPassword) return sendError(res, 400, 'Passwords must match.');
-
-      const passwordValidation = validatePassword(password);
-      if (!passwordValidation.ok) return sendError(res, 400, passwordValidation.error);
-
-      const payload = jwt.verify(passwordResetToken, PASSWORD_RESET_SECRET);
-      if (payload.purpose !== 'password-reset') return sendError(res, 401, 'Invalid or expired reset token.');
-
-      const passwordHash = await bcrypt.hash(String(password), BCRYPT_ROUNDS);
-      await transactionFn(async (client) => {
-        const userResult = await client.query('select id, session_version, is_active from users where id = $1 limit 1', [payload.sub]);
-        const existingUser = userResult.rows[0];
-        if (!existingUser) {
-          throw new Error('Invalid or expired reset token.');
-        }
-        if (existingUser.is_active === false) {
-          throw new Error('Account is inactive.');
-        }
-        await client.query(
-          'update users set password_hash = $1, password_changed_at = now(), session_version = session_version + 1, updated_at = now() where id = $2',
-          [passwordHash, payload.sub],
-        );
-      });
-
-      return res.json({ ok: true, message: 'Password updated successfully.' });
-    } catch (error) {
-      const routeError = getRouteError(error);
-      return sendError(res, routeError.status, routeError.message);
-    }
-  });
-
-  app.post('/api/auth/profile', async (req, res) => {
-    try {
-      const { user } = await getAuthenticatedUser(req);
-      return res.json({ ok: true, user: normalizeUser(user) });
-    } catch (error) {
-      const routeError = getRouteError(error);
-      return sendError(res, routeError.status, routeError.message);
-    }
-  });
-
-  app.put('/api/auth/profile', async (req, res) => {
-    try {
-      const { user } = await getAuthenticatedUser(req);
-      const { language, country } = req.body || {};
-      const updatedResult = await queryFn('update users set language = coalesce($1, language), country = coalesce($2, country), updated_at = now() where id = $3 returning *', [language || null, country || null, user.id]);
-      const updatedUser = updatedResult.rows[0];
-      return res.json({ ok: true, user: normalizeUser(updatedUser) });
-    } catch (error) {
-      const routeError = getRouteError(error);
-      return sendError(res, routeError.status, routeError.message);
-    }
-  });
-
-  app.post('/api/favorites', async (req, res) => {
-    try {
-      const { user } = await getAuthenticatedUser(req);
-      const { mediaType, movieId } = req.body || {};
-      if (!movieId) return sendError(res, 400, 'movieId is required.');
-      const normalizedMediaType = normalizeMediaType(mediaType);
-      if (!normalizedMediaType) return sendError(res, 400, 'Invalid media type.');
-      await queryFn('insert into favorites (user_id, movie_id, media_type, created_at) values ($1, $2, $3, now()) on conflict (user_id, media_type, movie_id) do nothing', [user.id, String(movieId), normalizedMediaType]);
-      return res.json({ ok: true });
-    } catch (error) {
-      const routeError = getRouteError(error);
-      return sendError(res, routeError.status, routeError.message);
-    }
-  });
-
-  app.delete('/api/favorites/:mediaType/:movieId', async (req, res) => {
-    try {
-      const { user } = await getAuthenticatedUser(req);
-      const { mediaType, movieId } = req.params;
-      const normalizedMediaType = normalizeMediaType(mediaType);
-      if (!normalizedMediaType) return sendError(res, 400, 'Invalid media type.');
-      await queryFn('delete from favorites where user_id = $1 and media_type = $2 and movie_id = $3', [user.id, normalizedMediaType, movieId]);
-      return res.json({ ok: true });
-    } catch (error) {
-      const routeError = getRouteError(error);
-      return sendError(res, routeError.status, routeError.message);
-    }
-  });
-
-  app.get('/api/favorites', async (req, res) => {
-    try {
-      const { user } = await getAuthenticatedUser(req);
-      const result = await queryFn('select movie_id, media_type from favorites where user_id = $1 order by created_at desc', [user.id]);
-      return res.json({ ok: true, items: result.rows.map((entry) => ({ id: entry.movie_id, mediaType: entry.media_type })) });
-    } catch (error) {
-      const routeError = getRouteError(error);
-      return sendError(res, routeError.status, routeError.message);
-    }
-  });
-
-  app.post('/api/library/sync', async (req, res) => {
-    try {
-      const { user } = await getAuthenticatedUser(req);
-      const { kind, items } = req.body || {};
-      if (!kind || !Array.isArray(items)) return sendError(res, 400, 'Invalid payload.');
-
-      if (kind === 'favorites') {
-        const existingRows = await queryFn('select movie_id, media_type from favorites where user_id = $1', [user.id]);
-        const existing = new Set(existingRows.rows.map((row) => `${row.media_type}:${row.movie_id}`));
-        const incoming = items.filter((item) => item && item.id);
-        const toInsert = [];
-        for (const item of incoming) {
-          const normalizedMediaType = normalizeMediaType(item.mediaType);
-          if (!normalizedMediaType) {
-            throw new Error('Invalid media type.');
-          }
-          const key = `${normalizedMediaType}:${String(item.id)}`;
-          if (!existing.has(key)) {
-            toInsert.push({ id: String(item.id), mediaType: normalizedMediaType });
-          }
-        }
-        for (const item of toInsert) {
-          await queryFn('insert into favorites (user_id, movie_id, media_type, created_at) values ($1, $2, $3, now()) on conflict (user_id, media_type, movie_id) do nothing', [user.id, item.id, item.mediaType]);
-        }
-        return res.json({ ok: true });
-      }
-
-      if (kind === 'watch_history') {
-        const incoming = items.filter((item) => item && item.id !== undefined && item.id !== null);
-        if (!incoming.length) return res.json({ ok: true });
-
-        const normalizedRows = incoming.map((item) => {
-          const mediaType = normalizeMediaType(item.mediaType);
-          if (!mediaType) throw new Error('Invalid media type.');
-          const movieId = String(item.id).trim();
-          if (!movieId) throw new Error('movieId is required.');
-
-          const seasonNumber = item.seasonNumber === undefined || item.seasonNumber === null ? null : Number(item.seasonNumber);
-          const episodeNumber = item.episodeNumber === undefined || item.episodeNumber === null ? null : Number(item.episodeNumber);
-          const progressSeconds = Number(item.progressSeconds ?? 0);
-          const durationSeconds = Number(item.durationSeconds ?? 0);
-
-          if (!Number.isFinite(seasonNumber) && seasonNumber !== null) throw new Error('Invalid seasonNumber.');
-          if (!Number.isFinite(episodeNumber) && episodeNumber !== null) throw new Error('Invalid episodeNumber.');
-          if (!Number.isFinite(progressSeconds) || progressSeconds < 0) throw new Error('Invalid progressSeconds.');
-          if (!Number.isFinite(durationSeconds) || durationSeconds < 0) throw new Error('Invalid durationSeconds.');
-
-          return { mediaType, movieId, seasonNumber, episodeNumber, progressSeconds, durationSeconds, completed: Boolean(item.completed) };
-        });
-
-        const values = normalizedRows.map((_, rowIndex) => {
-          const start = rowIndex * 8 + 1;
-          return `($${start}, $${start + 1}, $${start + 2}, $${start + 3}, $${start + 4}, $${start + 5}, $${start + 6}, $${start + 7}, now(), now(), now())`;
-        }).join(', ');
-
-        await transactionFn(async (client) => {
-          await client.query(`
-            insert into watch_history (
-              user_id, movie_id, season_number, episode_number, progress_seconds, duration_seconds, media_type, completed, created_at, updated_at, last_watched_at
-            ) values ${values}
-            on conflict (user_id, media_type, movie_id, (coalesce(season_number, 0)), (coalesce(episode_number, 0))) do update set
-              progress_seconds = excluded.progress_seconds,
-              duration_seconds = excluded.duration_seconds,
-              completed = excluded.completed,
-              updated_at = now(),
-              last_watched_at = now()
-          `, normalizedRows.flatMap((row) => [user.id, row.movieId, row.seasonNumber, row.episodeNumber, row.progressSeconds, row.durationSeconds, row.mediaType, row.completed]));
-        });
-
-        return res.json({ ok: true });
-      }
-
-      return sendError(res, 400, 'Unsupported library kind.');
-    } catch (error) {
-      const routeError = getRouteError(error);
-      return sendError(res, routeError.status, routeError.message);
-    }
-  });
-
-  app.get('/api/library/:kind', async (req, res) => {
-    try {
-      const { user } = await getAuthenticatedUser(req);
-      const { kind } = req.params;
-      if (kind === 'favorites') {
-        const result = await queryFn('select movie_id, media_type from favorites where user_id = $1 order by created_at desc', [user.id]);
-        return res.json({ ok: true, items: result.rows.map((entry) => ({ id: entry.movie_id, mediaType: entry.media_type })) });
-      }
-
-      if (kind === 'watch_history') {
-        const result = await queryFn('select * from watch_history where user_id = $1 order by last_watched_at desc, created_at desc', [user.id]);
-        return res.json({ ok: true, items: result.rows });
-      }
-
-      return sendError(res, 400, 'Unsupported library kind.');
-    } catch (error) {
-      const routeError = getRouteError(error);
-      return sendError(res, routeError.status, routeError.message);
-    }
-  });
-
-  app.post('/api/search/history', async (req, res) => {
-    try {
-      const { user } = await getAuthenticatedUser(req);
-      const { searchText } = req.body || {};
-      const normalized = normalizeSearchText(searchText);
-      if (!normalized) return sendError(res, 400, 'Search text is required.');
-
-      const existingResult = await queryFn('select search_text from search_history where user_id = $1 order by created_at desc', [user.id]);
-      const existingEntries = existingResult.rows || [];
-      const uniqueEntries = existingEntries.filter((entry, index, arr) => arr.findIndex((candidate) => candidate.search_text.toLowerCase() === entry.search_text.toLowerCase()) === index);
-      const filtered = uniqueEntries.filter((entry) => entry.search_text.toLowerCase() !== normalized.toLowerCase());
-      const nextEntries = [normalized, ...filtered.map((entry) => entry.search_text)].slice(0, 5);
-
-      await queryFn('delete from search_history where user_id = $1', [user.id]);
-      if (nextEntries.length) {
-        const insertValues = nextEntries.map((entry, index) => `($1, $${index + 2})`).join(', ');
-        await queryFn(`insert into search_history (user_id, search_text) values ${insertValues}`, [user.id, ...nextEntries]);
-      }
-
-      return res.json({ ok: true, items: nextEntries });
-    } catch (error) {
-      const routeError = getRouteError(error);
-      return sendError(res, routeError.status, routeError.message);
-    }
-  });
-
-  app.get('/api/search/history', async (req, res) => {
-    try {
-      const { user } = await getAuthenticatedUser(req);
-      const result = await queryFn('select search_text from search_history where user_id = $1 order by created_at desc limit 5', [user.id]);
-      return res.json({ ok: true, items: result.rows.map((entry) => entry.search_text) });
-    } catch (error) {
-      const routeError = getRouteError(error);
-      return sendError(res, routeError.status, routeError.message);
-    }
-  });
-
-  app.get('/api/lists', async (req, res) => {
-    try {
-      const { user } = await getAuthenticatedUser(req);
-      const result = await queryFn('select * from movie_lists where user_id = $1 order by created_at desc', [user.id]);
-      return res.json({ ok: true, items: result.rows });
-    } catch (error) {
-      const routeError = getRouteError(error);
-      return sendError(res, routeError.status, routeError.message);
-    }
-  });
-
-  app.post('/api/lists', async (req, res) => {
-    try {
-      const { user } = await getAuthenticatedUser(req);
-      const { name } = req.body || {};
-      const normalizedName = String(name || '').trim();
-      if (!normalizedName) return sendError(res, 400, 'List name is required.');
-      if (normalizedName.length > 60) return sendError(res, 400, 'List name must be 60 characters or fewer.');
-      const result = await queryFn('insert into movie_lists (user_id, name, created_at, updated_at) values ($1, $2, now(), now()) returning *', [user.id, normalizedName]);
-      return res.json({ ok: true, item: result.rows[0] });
-    } catch (error) {
-      const routeError = getRouteError(error);
-      return sendError(res, routeError.status, routeError.message);
-    }
-  });
-
-  app.get('/api/lists/:listId', async (req, res) => {
-    try {
-      const { user } = await getAuthenticatedUser(req);
-      const result = await queryFn('select * from movie_lists where id = $1 and user_id = $2 limit 1', [req.params.listId, user.id]);
-      if (!result.rows[0]) return sendError(res, 404, 'List not found.');
-      const itemsResult = await queryFn('select movie_id, media_type from movie_list_items where list_id = $1 order by created_at desc', [req.params.listId]);
-      return res.json({ ok: true, item: result.rows[0], items: itemsResult.rows });
-    } catch (error) {
-      const routeError = getRouteError(error);
-      return sendError(res, routeError.status, routeError.message);
-    }
-  });
-
-  app.put('/api/lists/:listId', async (req, res) => {
-    try {
-      const { user } = await getAuthenticatedUser(req);
-      const { name } = req.body || {};
-      const normalizedName = String(name || '').trim();
-      if (!normalizedName) return sendError(res, 400, 'List name is required.');
-      if (normalizedName.length > 60) return sendError(res, 400, 'List name must be 60 characters or fewer.');
-      const result = await queryFn('update movie_lists set name = $1, updated_at = now() where id = $2 and user_id = $3 returning *', [normalizedName, req.params.listId, user.id]);
-      if (!result.rows[0]) return sendError(res, 404, 'List not found.');
-      return res.json({ ok: true, item: result.rows[0] });
-    } catch (error) {
-      const routeError = getRouteError(error);
-      return sendError(res, routeError.status, routeError.message);
-    }
-  });
-
-  app.delete('/api/lists/:listId', async (req, res) => {
-    try {
-      const { user } = await getAuthenticatedUser(req);
-      const result = await queryFn('delete from movie_lists where id = $1 and user_id = $2', [req.params.listId, user.id]);
-      if (!result.rowCount) return sendError(res, 404, 'List not found.');
-      return res.json({ ok: true });
-    } catch (error) {
-      const routeError = getRouteError(error);
-      return sendError(res, routeError.status, routeError.message);
-    }
-  });
-
-  app.post('/api/lists/:listId/items', async (req, res) => {
-    try {
-      const { user } = await getAuthenticatedUser(req);
-      const { movieId, mediaType } = req.body || {};
-      if (!movieId) return sendError(res, 400, 'movieId is required.');
-      const normalizedMediaType = normalizeMediaType(mediaType);
-      if (!normalizedMediaType) return sendError(res, 400, 'Invalid media type.');
-      const listResult = await queryFn('select id from movie_lists where id = $1 and user_id = $2 limit 1', [req.params.listId, user.id]);
-      if (!listResult.rows[0]) return sendError(res, 404, 'List not found.');
-      await queryFn('insert into movie_list_items (list_id, movie_id, media_type, created_at) values ($1, $2, $3, now()) on conflict (list_id, media_type, movie_id) do nothing', [req.params.listId, String(movieId), normalizedMediaType]);
-      return res.json({ ok: true });
-    } catch (error) {
-      const routeError = getRouteError(error);
-      return sendError(res, routeError.status, routeError.message);
-    }
-  });
-
-  app.delete('/api/lists/:listId/items/:mediaType/:movieId', async (req, res) => {
-    try {
-      const { user } = await getAuthenticatedUser(req);
-      const normalizedMediaType = normalizeMediaType(req.params.mediaType);
-      if (!normalizedMediaType) return sendError(res, 400, 'Invalid media type.');
-      const listResult = await queryFn('select id from movie_lists where id = $1 and user_id = $2 limit 1', [req.params.listId, user.id]);
-      if (!listResult.rows[0]) return sendError(res, 404, 'List not found.');
-      await queryFn('delete from movie_list_items where list_id = $1 and media_type = $2 and movie_id = $3', [req.params.listId, normalizedMediaType, req.params.movieId]);
-      return res.json({ ok: true });
-    } catch (error) {
-      const routeError = getRouteError(error);
-      return sendError(res, routeError.status, routeError.message);
-    }
-  });
-
-  return app;
-}
-
-if (process.env.NODE_ENV !== 'test' && process.env.npm_lifecycle_event === 'server') {
-  const app = createApp();
-  app.listen(PORT, () => console.log(`PeakFlix auth server listening on ${PORT}`));
-}
-
-export default createApp;
+        select u.id, u.security_question_id, sq.question, u.is_active, u.session_version
+        from users Ûö¶‰žËkºwµçD°É•Ì¤€ôøì4(€€€ÑÉäì4(€€€€€½¹ÍÐìÕÍ•Èô€ô…Ý…¥Ð•ÑÕÑ¡•¹Ñ¥…Ñ•‘UÍ•È¡É•Ä¤ì4(€€€€€½¹ÍÐÉ•ÍÕ±Ð€ô…Ý…¥ÐÅÕ•Éå¸ Í•±•Ðµ½Ù¥•}¥°µ•‘¥…}ÑåÁ”™É½´™…Ù½É¥Ñ•ÌÝ¡•É”ÕÍ•É}¥€ô€Ä½É‘•È‰äÉ•…Ñ•‘}…Ð‘•ÍŒ±¥µ¥Ð€Èœ°mÕÍ•È¹¥°5a}1%	IIe}IMU1QMt¤ì(€€€€€É•ÑÕÉ¸É•Ì¹©Í½¸¡ì½¬èÑÉÕ”°¥Ñ•µÌèÉ•ÍÕ±Ð¹É½ÝÌ¹µ…À ¡•¹ÑÉä¤€ôø€¡ì¥è•¹ÑÉä¹µ½Ù¥•}¥°µ•‘¥…QåÁ”è•¹ÑÉä¹µ•‘¥…}ÑåÁ”ô¤¤ô¤ì4(€€€ô…Ñ €¡•ÉÉ½È¤ì4(€€€€€½¹ÍÐÉ½ÕÑ•ÉÉ½È€ô•ÑI½ÕÑ•ÉÉ½È¡•ÉÉ½È¤ì4(€€€€€É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°É½ÕÑ•ÉÉ½È¹ÍÑ…ÑÕÌ°É½ÕÑ•ÉÉ½È¹µ•ÍÍ…”¤ì4(€€€ô4(€ô¤ì4(4(€…ÁÀ¹Á½ÍÐ œ½…Á¤½±¥‰É…Éä½Íå¹Œœ°…Íå¹Œ€¡É•Ä°É•Ì¤€ôøì4(€€€ÑÉäì4(€€€€€½¹ÍÐìÕÍ•Èô€ô…Ý…¥Ð•ÑÕÑ¡•¹Ñ¥…Ñ•‘UÍ•È¡É•Ä¤ì(€€€€€½¹ÍÐì­¥¹°¥Ñ•µÌô€ôÉ•Ä¹‰½‘äñðíôì(€€€€€¥˜€ …­¥¹ñð€…ÉÉ…ä¹¥ÍÉÉ…ä¡¥Ñ•µÌ¤¤É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°€ÐÀÀ°€%¹Ù…±¥Á…å±½…¸œ¤ì(€€€€€¥˜€¡¥Ñ•µÌ¹±•¹Ñ €ø5a}Me9}%Q5L¤É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°€ÐÀÀ°€Q½¼µ…¹ä¥Ñ•µÌ¥¸½¹”Íå¹ŒÉ•ÅÕ•ÍÐ¸œ¤ì((€€€€€¥˜€¡­¥¹€ôôô€™…Ù½É¥Ñ•Ìœ¤ì(€€€€€€€½¹ÍÐ•á¥ÍÑ¥¹I½ÝÌ€ô…Ý…¥ÐÅÕ•Éå¸ Í•±•Ðµ½Ù¥•}¥°µ•‘¥…}ÑåÁ”™É½´™…Ù½É¥Ñ•ÌÝ¡•É”ÕÍ•É}¥€ô€Äœ°mÕÍ•È¹¥‘t¤ì4(€€€€€€€½¹ÍÐ•á¥ÍÑ¥¹œ€ô¹•ÜM•Ð¡•á¥ÍÑ¥¹I½ÝÌ¹É½ÝÌ¹µ…À ¡É½Ü¤€ôø€‘íÉ½Ü¹µ•‘¥…}ÑåÁ•ôè‘íÉ½Ü¹µ½Ù¥•}¥‘õ€¤¤ì4(€€€€€€€½¹ÍÐ¥¹½µ¥¹œ€ô¥Ñ•µÌ¹™¥±Ñ•È ¡¥Ñ•´¤€ôø¥Ñ•´€˜˜¥Ñ•´¹¥¤ì4(€€€€€€€½¹ÍÐÑ½%¹Í•ÉÐ€ômtì4(€€€€€€€™½È€¡½¹ÍÐ¥Ñ•´½˜¥¹½µ¥¹œ¤ì4(€€€€€€€€€½¹ÍÐ¹½Éµ…±¥é•‘5•‘¥…QåÁ”€ô¹½Éµ…±¥é•5•‘¥…QåÁ”¡¥Ñ•´¹µ•‘¥…QåÁ”¤ì4(€€€€€€€€€¥˜€ …¹½Éµ…±¥é•‘5•‘¥…QåÁ”¤ì4(€€€€€€€€€€€Ñ¡É½Ü¹•ÜÉÉ½È %¹Ù…±¥µ•‘¥„ÑåÁ”¸œ¤ì4(€€€€€€€€€ô4(€€€€€€€€€½¹ÍÐ­•ä€ô€‘í¹½Éµ…±¥é•‘5•‘¥…QåÁ•ôè‘íMÑÉ¥¹œ¡¥Ñ•´¹¥¥õ€ì4(€€€€€€€€€¥˜€ …•á¥ÍÑ¥¹œ¹¡…Ì¡­•ä¤¤ì4(€€€€€€€€€€€Ñ½%¹Í•ÉÐ¹ÁÕÍ ¡ì¥èMÑÉ¥¹œ¡¥Ñ•´¹¥¤°µ•‘¥…QåÁ”è¹½Éµ…±¥é•‘5•‘¥…QåÁ”ô¤ì4(€€€€€€€€€ô4(€€€€€€€ô4(€€€€€€€¥˜€¡Ñ½%¹Í•ÉÐ¹±•¹Ñ ¤ì(€€€€€€€€€½¹ÍÐÙ…±Õ•Ì€ôÑ½%¹Í•ÉÐ¹µ…À ¡|°¥¹‘•à¤€ôøì(€€€€€€€€€€€½¹ÍÐÍÑ…ÉÐ€ô¥¹‘•à€¨€Ì€¬€Äì(€€€€€€€€€€€É•ÑÕÉ¸€ ‘íÍÑ…ÉÑô°€‘íÍÑ…ÉÐ€¬€Åô°€‘íÍÑ…ÉÐ€¬€Éô°¹½Ü ¤¥€ì(€€€€€€€€€ô¤¹©½¥¸ œ°€œ¤ì(€€€€€€€€€…Ý…¥ÐÅÕ•Éå¸ (€€€€€€€€€€€¥¹Í•ÉÐ¥¹Ñ¼™…Ù½É¥Ñ•Ì€¡ÕÍ•É}¥°µ½Ù¥•}¥°µ•‘¥…}ÑåÁ”°É•…Ñ•‘}…Ð¤Ù…±Õ•Ì€‘íÙ…±Õ•Íô½¸½¹™±¥Ð€¡ÕÍ•É}¥°µ•‘¥…}ÑåÁ”°µ½Ù¥•}¥¤‘¼¹½Ñ¡¥¹€°(€€€€€€€€€€€Ñ½%¹Í•ÉÐ¹™±…Ñ5…À ¡¥Ñ•´¤€ôømÕÍ•È¹¥°¥Ñ•´¹¥°¥Ñ•´¹µ•‘¥…QåÁ•t¤°(€€€€€€€€€€¤ì(€€€€€€€ô(€€€€€€€É•ÑÕÉ¸É•Ì¹©Í½¸¡ì½¬èÑÉÕ”ô¤ì4(€€€€€ô4(4(€€€€€¥˜€¡­¥¹€ôôô€Ý…Ñ¡}¡¥ÍÑ½Éäœ¤ì4(€€€€€€€½¹ÍÐ¥¹½µ¥¹œ€ô¥Ñ•µÌ¹™¥±Ñ•È ¡¥Ñ•´¤€ôø¥Ñ•´€˜˜¥Ñ•´¹¥€„ôôÕ¹‘•™¥¹•€˜˜¥Ñ•´¹¥€„ôô¹Õ±°¤ì4(€€€€€€€¥˜€ …¥¹½µ¥¹œ¹±•¹Ñ ¤É•ÑÕÉ¸É•Ì¹©Í½¸¡ì½¬èÑÉÕ”ô¤ì4(4(€€€€€€€½¹ÍÐ¹½Éµ…±¥é•‘I½ÝÌ€ô¥¹½µ¥¹œ¹µ…À ¡¥Ñ•´¤€ôøì4(€€€€€€€€€½¹ÍÐµ•‘¥…QåÁ”€ô¹½Éµ…±¥é•5•‘¥…QåÁ”¡¥Ñ•´¹µ•‘¥…QåÁ”¤ì4(€€€€€€€€€¥˜€ …µ•‘¥…QåÁ”¤Ñ¡É½Ü¹•ÜÉÉ½È %¹Ù…±¥µ•‘¥„ÑåÁ”¸œ¤ì4(€€€€€€€€€½¹ÍÐµ½Ù¥•%€ôMÑÉ¥¹œ¡¥Ñ•´¹¥¤¹ÑÉ¥´ ¤ì4(€€€€€€€€€¥˜€ …µ½Ù¥•%¤Ñ¡É½Ü¹•ÜÉÉ½È µ½Ù¥•%¥ÌÉ•ÅÕ¥É•¸œ¤ì4(4(€€€€€€€€€½¹ÍÐÍ•…Í½¹9Õµ‰•È€ô¥Ñ•´¹Í•…Í½¹9Õµ‰•È€ôôôÕ¹‘•™¥¹•ñð¥Ñ•´¹Í•…Í½¹9Õµ‰•È€ôôô¹Õ±°€ü¹Õ±°€è9Õµ‰•È¡¥Ñ•´¹Í•…Í½¹9Õµ‰•È¤ì4(€€€€€€€€€½¹ÍÐ•Á¥Í½‘•9Õµ‰•È€ô¥Ñ•´¹•Á¥Í½‘•9Õµ‰•È€ôôôÕ¹‘•™¥¹•ñð¥Ñ•´¹•Á¥Í½‘•9Õµ‰•È€ôôô¹Õ±°€ü¹Õ±°€è9Õµ‰•È¡¥Ñ•´¹•Á¥Í½‘•9Õµ‰•È¤ì4(€€€€€€€€€½¹ÍÐÁÉ½É•ÍÍM•½¹‘Ì€ô9Õµ‰•È¡¥Ñ•´¹ÁÉ½É•ÍÍM•½¹‘Ì€üü€À¤ì4(€€€€€€€€€½¹ÍÐ‘ÕÉ…Ñ¥½¹M•½¹‘Ì€ô9Õµ‰•È¡¥Ñ•´¹‘ÕÉ…Ñ¥½¹M•½¹‘Ì€üü€À¤ì4(4(€€€€€€€€€¥˜€¡Í•…Í½¹9Õµ‰•È€„ôô¹Õ±°€˜˜€ …9Õµ‰•È¹¥Í%¹Ñ••È¡Í•…Í½¹9Õµ‰•È¤ñðÍ•…Í½¹9Õµ‰•È€ðô€À¤¤Ñ¡É½Ü¹•ÜÉÉ½È %¹Ù…±¥Í•…Í½¹9Õµ‰•È¸œ¤ì(€€€€€€€€€¥˜€¡•Á¥Í½‘•9Õµ‰•È€„ôô¹Õ±°€˜˜€ …9Õµ‰•È¹¥Í%¹Ñ••È¡•Á¥Í½‘•9Õµ‰•È¤ñð•Á¥Í½‘•9Õµ‰•È€ðô€À¤¤Ñ¡É½Ü¹•ÜÉÉ½È %¹Ù…±¥•Á¥Í½‘•9Õµ‰•È¸œ¤ì(€€€€€€€€€¥˜€ …9Õµ‰•È¹¥Í%¹Ñ••È¡ÁÉ½É•ÍÍM•½¹‘Ì¤ñðÁÉ½É•ÍÍM•½¹‘Ì€ð€À¤Ñ¡É½Ü¹•ÜÉÉ½È %¹Ù…±¥ÁÉ½É•ÍÍM•½¹‘Ì¸œ¤ì(€€€€€€€€€¥˜€ …9Õµ‰•È¹¥Í%¹Ñ••È¡‘ÕÉ…Ñ¥½¹M•½¹‘Ì¤ñð‘ÕÉ…Ñ¥½¹M•½¹‘Ì€ð€À¤Ñ¡É½Ü¹•ÜÉÉ½È %¹Ù…±¥‘ÕÉ…Ñ¥½¹M•½¹‘Ì¸œ¤ì(€€€€€€€€€¥˜€¡‘ÕÉ…Ñ¥½¹M•½¹‘Ì€ø€À€˜˜ÁÉ½É•ÍÍM•½¹‘Ì€ø‘ÕÉ…Ñ¥½¹M•½¹‘Ì¤Ñ¡É½Ü¹•ÜÉÉ½È AÉ½É•ÍÌ…¹¹½Ð‰”É•…Ñ•ÈÑ¡…¸‘ÕÉ…Ñ¥½¸¸œ¤ì(4(€€€€€€€€€É•ÑÕÉ¸ìµ•‘¥…QåÁ”°µ½Ù¥•%°Í•…Í½¹9Õµ‰•È°•Á¥Í½‘•9Õµ‰•È°ÁÉ½É•ÍÍM•½¹‘Ì°‘ÕÉ…Ñ¥½¹M•½¹‘Ì°½µÁ±•Ñ•è	½½±•…¸¡¥Ñ•´¹½µÁ±•Ñ•¤ôì4(€€€€€€€ô¤ì4(4(€€€€€€€½¹ÍÐÙ…±Õ•Ì€ô¹½Éµ…±¥é•‘I½ÝÌ¹µ…À ¡|°É½Ý%¹‘•à¤€ôøì4(€€€€€€€€€½¹ÍÐÍÑ…ÉÐ€ôÉ½Ý%¹‘•à€¨€à€¬€Äì4(€€€€€€€€€É•ÑÕÉ¸€ ‘íÍÑ…ÉÑô°€‘íÍÑ…ÉÐ€¬€Åô°€‘íÍÑ…ÉÐ€¬€Éô°€‘íÍÑ…ÉÐ€¬€Íô°€‘íÍÑ…ÉÐ€¬€Ñô°€‘íÍÑ…ÉÐ€¬€Õô°€‘íÍÑ…ÉÐ€¬€Ùô°€‘íÍÑ…ÉÐ€¬€Ýô°¹½Ü ¤°¹½Ü ¤°¹½Ü ¤¥€ì4(€€€€€€€ô¤¹©½¥¸ œ°€œ¤ì4(4(€€€€€€€…Ý…¥ÐÑÉ…¹Í…Ñ¥½¹¸¡…Íå¹Œ€¡±¥•¹Ð¤€ôøì4(€€€€€€€€€…Ý…¥Ð±¥•¹Ð¹ÅÕ•Éä¡€4(€€€€€€€€€€€¥¹Í•ÉÐ¥¹Ñ¼Ý…Ñ¡}¡¥ÍÑ½Éä€ 4(€€€€€€€€€€€€€ÕÍ•É}¥°µ½Ù¥•}¥°Í•…Í½¹}¹Õµ‰•È°•Á¥Í½‘•}¹Õµ‰•È°ÁÉ½É•ÍÍ}Í•½¹‘Ì°‘ÕÉ…Ñ¥½¹}Í•½¹‘Ì°µ•‘¥…}ÑåÁ”°½µÁ±•Ñ•°É•…Ñ•‘}…Ð°ÕÁ‘…Ñ•‘}…Ð°±…ÍÑ}Ý…Ñ¡•‘}…Ð4(€€€€€€€€€€€€¤Ù…±Õ•Ì€‘íÙ…±Õ•Íô4(€€€€€€€€€€€½¸½¹™±¥Ð€¡ÕÍ•É}¥°µ•‘¥…}ÑåÁ”°µ½Ù¥•}¥°€¡½…±•Í”¡Í•…Í½¹}¹Õµ‰•È°€À¤¤°€¡½…±•Í”¡•Á¥Í½‘•}¹Õµ‰•È°€À¤¤¤‘¼ÕÁ‘…Ñ”Í•Ð4(€€€€€€€€€€€€€ÁÉ½É•ÍÍ}Í•½¹‘Ì€ô•á±Õ‘•¹ÁÉ½É•ÍÍ}Í•½¹‘Ì°4(€€€€€€€€€€€€€‘ÕÉ…Ñ¥½¹}Í•½¹‘Ì€ô•á±Õ‘•¹‘ÕÉ…Ñ¥½¹}Í•½¹‘Ì°4(€€€€€€€€€€€€€½µÁ±•Ñ•€ô•á±Õ‘•¹½µÁ±•Ñ•°4(€€€€€€€€€€€€€ÕÁ‘…Ñ•‘}…Ð€ô¹½Ü ¤°4(€€€€€€€€€€€€€±…ÍÑ}Ý…Ñ¡•‘}…Ð€ô¹½Ü ¤4(€€€€€€€€€€°¹½Éµ…±¥é•‘I½ÝÌ¹™±…Ñ5…À ¡É½Ü¤€ôømÕÍ•È¹¥°É½Ü¹µ½Ù¥•%°É½Ü¹Í•…Í½¹9Õµ‰•È°É½Ü¹•Á¥Í½‘•9Õµ‰•È°É½Ü¹ÁÉ½É•ÍÍM•½¹‘Ì°É½Ü¹‘ÕÉ…Ñ¥½¹M•½¹‘Ì°É½Ü¹µ•‘¥…QåÁ”°É½Ü¹½µÁ±•Ñ•‘t¤¤ì4(€€€€€€€ô¤ì4(4(€€€€€€€É•ÑÕÉ¸É•Ì¹©Í½¸¡ì½¬èÑÉÕ”ô¤ì4(€€€€€ô4(4(€€€€€É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°€ÐÀÀ°€U¹ÍÕÁÁ½ÉÑ•±¥‰É…Éä­¥¹¸œ¤ì4(€€€ô…Ñ €¡•ÉÉ½È¤ì4(€€€€€½¹ÍÐÉ½ÕÑ•ÉÉ½È€ô•ÑI½ÕÑ•ÉÉ½È¡•ÉÉ½È¤ì4(€€€€€É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°É½ÕÑ•ÉÉ½È¹ÍÑ…ÑÕÌ°É½ÕÑ•ÉÉ½È¹µ•ÍÍ…”¤ì4(€€€ô4(€ô¤ì4(4(€…ÁÀ¹•Ð œ½…Á¤½±¥‰É…Éä¼é­¥¹œ°…Íå¹Œ€¡É•Ä°É•Ì¤€ôøì4(€€€ÑÉäì4(€€€€€½¹ÍÐìÕÍ•Èô€ô…Ý…¥Ð•ÑÕÑ¡•¹Ñ¥…Ñ•‘UÍ•È¡É•Ä¤ì4(€€€€€½¹ÍÐì­¥¹ô€ôÉ•Ä¹Á…É…µÌì4(€€€€€¥˜€¡­¥¹€ôôô€™…Ù½É¥Ñ•Ìœ¤ì4(€€€€€€€½¹ÍÐÉ•ÍÕ±Ð€ô…Ý…¥ÐÅÕ•Éå¸ Í•±•Ðµ½Ù¥•}¥°µ•‘¥…}ÑåÁ”™É½´™…Ù½É¥Ñ•ÌÝ¡•É”ÕÍ•É}¥€ô€Ä½É‘•È‰äÉ•…Ñ•‘}…Ð‘•ÍŒ±¥µ¥Ð€Èœ°mÕÍ•È¹¥°5a}1%	IIe}IMU1QMt¤ì(€€€€€€€É•ÑÕÉ¸É•Ì¹©Í½¸¡ì½¬èÑÉÕ”°¥Ñ•µÌèÉ•ÍÕ±Ð¹É½ÝÌ¹µ…À ¡•¹ÑÉä¤€ôø€¡ì¥è•¹ÑÉä¹µ½Ù¥•}¥°µ•‘¥…QåÁ”è•¹ÑÉä¹µ•‘¥…}ÑåÁ”ô¤¤ô¤ì4(€€€€€ô4(4(€€€€€¥˜€¡­¥¹€ôôô€Ý…Ñ¡}¡¥ÍÑ½Éäœ¤ì4(€€€€€€€½¹ÍÐÉ•ÍÕ±Ð€ô…Ý…¥ÐÅÕ•Éå¸ Í•±•Ð€¨™É½´Ý…Ñ¡}¡¥ÍÑ½ÉäÝ¡•É”ÕÍ•É}¥€ô€Ä½É‘•È‰ä±…ÍÑ}Ý…Ñ¡•‘}…Ð‘•ÍŒ°É•…Ñ•‘}…Ð‘•ÍŒ±¥µ¥Ð€Èœ°mÕÍ•È¹¥°5a}1%	IIe}IMU1QMt¤ì(€€€€€€€É•ÑÕÉ¸É•Ì¹©Í½¸¡ì½¬èÑÉÕ”°¥Ñ•µÌèÉ•ÍÕ±Ð¹É½ÝÌô¤ì4(€€€€€ô4(4(€€€€€É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°€ÐÀÀ°€U¹ÍÕÁÁ½ÉÑ•±¥‰É…Éä­¥¹¸œ¤ì4(€€€ô…Ñ €¡•ÉÉ½È¤ì4(€€€€€½¹ÍÐÉ½ÕÑ•ÉÉ½È€ô•ÑI½ÕÑ•ÉÉ½È¡•ÉÉ½È¤ì4(€€€€€É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°É½ÕÑ•ÉÉ½È¹ÍÑ…ÑÕÌ°É½ÕÑ•ÉÉ½È¹µ•ÍÍ…”¤ì4(€€€ô4(€ô¤ì4(4(€…ÁÀ¹Á½ÍÐ œ½…Á¤½Í•…É ½¡¥ÍÑ½Éäœ°…Íå¹Œ€¡É•Ä°É•Ì¤€ôøì4(€€€ÑÉäì4(€€€€€½¹ÍÐìÕÍ•Èô€ô…Ý…¥Ð•ÑÕÑ¡•¹Ñ¥…Ñ•‘UÍ•È¡É•Ä¤ì4(€€€€€½¹ÍÐìÍ•…É¡Q•áÐô€ôÉ•Ä¹‰½‘äñðíôì4(€€€€€½¹ÍÐ¹½Éµ…±¥é•€ô¹½Éµ…±¥é•M•…É¡Q•áÐ¡Í•…É¡Q•áÐ¤ì(€€€€€¥˜€ …¹½Éµ…±¥é•¤É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°€ÐÀÀ°€M•…É Ñ•áÐ¥ÌÉ•ÅÕ¥É•¸œ¤ì(€€€€€¥˜€¡¹½Éµ…±¥é•¹±•¹Ñ €ø€ÈÀÀ¤É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°€ÐÀÀ°€M•…É Ñ•áÐ¥ÌÑ½¼±½¹œ¸œ¤ì((€€€€€½¹ÍÐ¹•áÑ¹ÑÉ¥•Ì€ô…Ý…¥ÐÑÉ…¹Í…Ñ¥½¹¸¡…Íå¹Œ€¡±¥•¹Ð¤€ôøì(€€€€€€€…Ý…¥Ð±¥•¹Ð¹ÅÕ•Éä¡€(€€€€€€€€€¥¹Í•ÉÐ¥¹Ñ¼Í•…É¡}¡¥ÍÑ½Éä€¡ÕÍ•É}¥°Í•…É¡}Ñ•áÐ°É•…Ñ•‘}…Ð°±…ÍÑ}Í•…É¡•‘}…Ð¤(€€€€€€€€€Ù…±Õ•Ì€ Ä°€È°¹½Ü ¤°¹½Ü ¤¤(€€€€€€€€€½¸½¹™±¥Ð€¡ÕÍ•É}¥°€¡±½Ý•È¡Í•…É¡}Ñ•áÐ¤¤¤‘¼ÕÁ‘…Ñ”(€€€€€€€€€Í•ÐÍ•…É¡}Ñ•áÐ€ô•á±Õ‘•¹Í•…É¡}Ñ•áÐ°±…ÍÑ}Í•…É¡•‘}…Ð€ô¹½Ü ¤(€€€€€€€€°mÕÍ•È¹¥°¹½Éµ…±¥é•‘t¤ì(€€€€€€€…Ý…¥Ð±¥•¹Ð¹ÅÕ•Éä¡€(€€€€€€€€€‘•±•Ñ”™É½´Í•…É¡}¡¥ÍÑ½Éä(€€€€€€€€€Ý¡•É”ÕÍ•É}¥€ô€Ä…¹¥¹½Ð¥¸€ (€€€€€€€€€€€Í•±•Ð¥™É½´Í•…É¡}¡¥ÍÑ½ÉäÝ¡•É”ÕÍ•É}¥€ô€Ä(€€€€€€€€€€€½É‘•È‰ä±…ÍÑ}Í•…É¡•‘}…Ð‘•ÍŒ°¥‘•ÍŒ±¥µ¥Ð€Ô(€€€€€€€€€€¤(€€€€€€€€°mÕÍ•È¹¥‘t¤ì(€€€€€€€½¹ÍÐÉ•ÍÕ±Ð€ô…Ý…¥Ð±¥•¹Ð¹ÅÕ•Éä Í•±•ÐÍ•…É¡}Ñ•áÐ™É½´Í•…É¡}¡¥ÍÑ½ÉäÝ¡•É”ÕÍ•É}¥€ô€Ä½É‘•È‰ä±…ÍÑ}Í•…É¡•‘}…Ð‘•ÍŒ°¥‘•ÍŒ±¥µ¥Ð€Ôœ°mÕÍ•È¹¥‘t¤ì(€€€€€€€É•ÑÕÉ¸É•ÍÕ±Ð¹É½ÝÌ¹µ…À ¡•¹ÑÉä¤€ôø•¹ÑÉä¹Í•…É¡}Ñ•áÐ¤ì(€€€€€ô¤ì((€€€€€É•ÑÕÉ¸É•Ì¹©Í½¸¡ì½¬èÑÉÕ”°¥Ñ•µÌè¹•áÑ¹ÑÉ¥•Ìô¤ì(€€€ô…Ñ €¡•ÉÉ½È¤ì4(€€€€€½¹ÍÐÉ½ÕÑ•ÉÉ½È€ô•ÑI½ÕÑ•ÉÉ½È¡•ÉÉ½È¤ì4(€€€€€É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°É½ÕÑ•ÉÉ½È¹ÍÑ…ÑÕÌ°É½ÕÑ•ÉÉ½È¹µ•ÍÍ…”¤ì4(€€€ô4(€ô¤ì4(4(€…ÁÀ¹•Ð œ½…Á¤½Í•…É ½¡¥ÍÑ½Éäœ°…Íå¹Œ€¡É•Ä°É•Ì¤€ôøì4(€€€ÑÉäì4(€€€€€½¹ÍÐìÕÍ•Èô€ô…Ý…¥Ð•ÑÕÑ¡•¹Ñ¥…Ñ•‘UÍ•È¡É•Ä¤ì4(€€€€€½¹ÍÐÉ•ÍÕ±Ð€ô…Ý…¥ÐÅÕ•Éå¸ Í•±•ÐÍ•…É¡}Ñ•áÐ™É½´Í•…É¡}¡¥ÍÑ½ÉäÝ¡•É”ÕÍ•É}¥€ô€Ä½É‘•È‰ä±…ÍÑ}Í•…É¡•‘}…Ð‘•ÍŒ°¥‘•ÍŒ±¥µ¥Ð€Ôœ°mÕÍ•È¹¥‘t¤ì(€€€€€É•ÑÕÉ¸É•Ì¹©Í½¸¡ì½¬èÑÉÕ”°¥Ñ•µÌèÉ•ÍÕ±Ð¹É½ÝÌ¹µ…À ¡•¹ÑÉä¤€ôø•¹ÑÉä¹Í•…É¡}Ñ•áÐ¤ô¤ì4(€€€ô…Ñ €¡•ÉÉ½È¤ì4(€€€€€½¹ÍÐÉ½ÕÑ•ÉÉ½È€ô•ÑI½ÕÑ•ÉÉ½È¡•ÉÉ½È¤ì4(€€€€€É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°É½ÕÑ•ÉÉ½È¹ÍÑ…ÑÕÌ°É½ÕÑ•ÉÉ½È¹µ•ÍÍ…”¤ì4(€€€ô4(€ô¤ì4(4(€…ÁÀ¹•Ð œ½…Á¤½±¥ÍÑÌœ°…Íå¹Œ€¡É•Ä°É•Ì¤€ôøì4(€€€ÑÉäì4(€€€€€½¹ÍÐìÕÍ•Èô€ô…Ý…¥Ð•ÑÕÑ¡•¹Ñ¥…Ñ•‘UÍ•È¡É•Ä¤ì4(€€€€€½¹ÍÐÉ•ÍÕ±Ð€ô…Ý…¥ÐÅÕ•Éå¸ Í•±•Ð€¨™É½´µ½Ù¥•}±¥ÍÑÌÝ¡•É”ÕÍ•É}¥€ô€Ä½É‘•È‰äÉ•…Ñ•‘}…Ð‘•ÍŒ±¥µ¥Ð€Èœ°mÕÍ•È¹¥°5a}1%MQM}AI}UMIt¤ì(€€€€€É•ÑÕÉ¸É•Ì¹©Í½¸¡ì½¬èÑÉÕ”°¥Ñ•µÌèÉ•ÍÕ±Ð¹É½ÝÌô¤ì4(€€€ô…Ñ €¡•ÉÉ½È¤ì4(€€€€€½¹ÍÐÉ½ÕÑ•ÉÉ½È€ô•ÑI½ÕÑ•ÉÉ½È¡•ÉÉ½È¤ì4(€€€€€É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°É½ÕÑ•ÉÉ½È¹ÍÑ…ÑÕÌ°É½ÕÑ•ÉÉ½È¹µ•ÍÍ…”¤ì4(€€€ô4(€ô¤ì4(4(€…ÁÀ¹Á½ÍÐ œ½…Á¤½±¥ÍÑÌœ°…Íå¹Œ€¡É•Ä°É•Ì¤€ôøì4(€€€ÑÉäì4(€€€€€½¹ÍÐìÕÍ•Èô€ô…Ý…¥Ð•ÑÕÑ¡•¹Ñ¥…Ñ•‘UÍ•È¡É•Ä¤ì4(€€€€€½¹ÍÐì¹…µ”ô€ôÉ•Ä¹‰½‘äñðíôì4(€€€€€½¹ÍÐ¹½Éµ…±¥é•‘9…µ”€ôMÑÉ¥¹œ¡¹…µ”ñð€œœ¤¹ÑÉ¥´ ¤ì4(€€€€€¥˜€ …¹½Éµ…±¥é•‘9…µ”¤É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°€ÐÀÀ°€1¥ÍÐ¹…µ”¥ÌÉ•ÅÕ¥É•¸œ¤ì(€€€€€¥˜€¡¹½Éµ…±¥é•‘9…µ”¹±•¹Ñ €ø€ØÀ¤É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°€ÐÀÀ°€1¥ÍÐ¹…µ”µÕÍÐ‰”€ØÀ¡…É…Ñ•ÉÌ½È™•Ý•È¸œ¤ì(€€€€€½¹ÍÐ½Õ¹ÑI•ÍÕ±Ð€ô…Ý…¥ÐÅÕ•Éå¸ Í•±•Ð½Õ¹Ð ¨¤èé¥¹Ñ••È…Ì½Õ¹Ð™É½´µ½Ù¥•}±¥ÍÑÌÝ¡•É”ÕÍ•É}¥€ô€Äœ°mÕÍ•È¹¥‘t¤ì(€€€€€¥˜€ ¡½Õ¹ÑI•ÍÕ±Ð¹É½ÝÍlÁtü¹½Õ¹Ðñð€À¤€øô5a}1%MQM}AI}UMH¤É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°€ÐÀÀ°€1¥ÍÐ±¥µ¥ÐÉ•…¡•¸œ¤ì(€€€€€½¹ÍÐÉ•ÍÕ±Ð€ô…Ý…¥ÐÅÕ•Éå¸ ¥¹Í•ÉÐ¥¹Ñ¼µ½Ù¥•}±¥ÍÑÌ€¡ÕÍ•É}¥°¹…µ”°É•…Ñ•‘}…Ð°ÕÁ‘…Ñ•‘}…Ð¤Ù…±Õ•Ì€ Ä°€È°¹½Ü ¤°¹½Ü ¤¤É•ÑÕÉ¹¥¹œ€¨œ°mÕÍ•È¹¥°¹½Éµ…±¥é•‘9…µ•t¤ì(€€€€€É•ÑÕÉ¸É•Ì¹©Í½¸¡ì½¬èÑÉÕ”°¥Ñ•´èÉ•ÍÕ±Ð¹É½ÝÍlÁtô¤ì4(€€€ô…Ñ €¡•ÉÉ½È¤ì4(€€€€€½¹ÍÐÉ½ÕÑ•ÉÉ½È€ô•ÑI½ÕÑ•ÉÉ½È¡•ÉÉ½È¤ì4(€€€€€É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°É½ÕÑ•ÉÉ½È¹ÍÑ…ÑÕÌ°É½ÕÑ•ÉÉ½È¹µ•ÍÍ…”¤ì4(€€€ô4(€ô¤ì4(4(€…ÁÀ¹•Ð œ½…Á¤½±¥ÍÑÌ¼é±¥ÍÑ%œ°…Íå¹Œ€¡É•Ä°É•Ì¤€ôøì4(€€€ÑÉäì4(€€€€€½¹ÍÐìÕÍ•Èô€ô…Ý…¥Ð•ÑÕÑ¡•¹Ñ¥…Ñ•‘UÍ•È¡É•Ä¤ì4(€€€€€½¹ÍÐÉ•ÍÕ±Ð€ô…Ý…¥ÐÅÕ•Éå¸ Í•±•Ð€¨™É½´µ½Ù¥•}±¥ÍÑÌÝ¡•É”¥€ô€Ä…¹ÕÍ•É}¥€ô€È±¥µ¥Ð€Äœ°mÉ•Ä¹Á…É…µÌ¹±¥ÍÑ%°ÕÍ•È¹¥‘t¤ì4(€€€€€¥˜€ …É•ÍÕ±Ð¹É½ÝÍlÁt¤É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°€ÐÀÐ°€1¥ÍÐ¹½Ð™½Õ¹¸œ¤ì4(€€€€€½¹ÍÐ¥Ñ•µÍI•ÍÕ±Ð€ô…Ý…¥ÐÅÕ•Éå¸ Í•±•Ðµ½Ù¥•}¥°µ•‘¥…}ÑåÁ”™É½´µ½Ù¥•}±¥ÍÑ}¥Ñ•µÌÝ¡•É”±¥ÍÑ}¥€ô€Ä½É‘•È‰äÉ•…Ñ•‘}…Ð‘•ÍŒ±¥µ¥Ð€Èœ°mÉ•Ä¹Á…É…µÌ¹±¥ÍÑ%°5a}%Q5M}AI}1%MQt¤ì(€€€€€É•ÑÕÉ¸É•Ì¹©Í½¸¡ì½¬èÑÉÕ”°¥Ñ•´èÉ•ÍÕ±Ð¹É½ÝÍlÁt°¥Ñ•µÌè¥Ñ•µÍI•ÍÕ±Ð¹É½ÝÌô¤ì4(€€€ô…Ñ €¡•ÉÉ½È¤ì4(€€€€€½¹ÍÐÉ½ÕÑ•ÉÉ½È€ô•ÑI½ÕÑ•ÉÉ½È¡•ÉÉ½È¤ì4(€€€€€É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°É½ÕÑ•ÉÉ½È¹ÍÑ…ÑÕÌ°É½ÕÑ•ÉÉ½È¹µ•ÍÍ…”¤ì4(€€€ô4(€ô¤ì4(4(€…ÁÀ¹ÁÕÐ œ½…Á¤½±¥ÍÑÌ¼é±¥ÍÑ%œ°…Íå¹Œ€¡É•Ä°É•Ì¤€ôøì4(€€€ÑÉäì4(€€€€€½¹ÍÐìÕÍ•Èô€ô…Ý…¥Ð•ÑÕÑ¡•¹Ñ¥…Ñ•‘UÍ•È¡É•Ä¤ì4(€€€€€½¹ÍÐì¹…µ”ô€ôÉ•Ä¹‰½‘äñðíôì4(€€€€€½¹ÍÐ¹½Éµ…±¥é•‘9…µ”€ôMÑÉ¥¹œ¡¹…µ”ñð€œœ¤¹ÑÉ¥´ ¤ì4(€€€€€¥˜€ …¹½Éµ…±¥é•‘9…µ”¤É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°€ÐÀÀ°€1¥ÍÐ¹…µ”¥ÌÉ•ÅÕ¥É•¸œ¤ì4(€€€€€¥˜€¡¹½Éµ…±¥é•‘9…µ”¹±•¹Ñ €ø€ØÀ¤É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°€ÐÀÀ°€1¥ÍÐ¹…µ”µÕÍÐ‰”€ØÀ¡…É…Ñ•ÉÌ½È™•Ý•È¸œ¤ì4(€€€€€½¹ÍÐÉ•ÍÕ±Ð€ô…Ý…¥ÐÅÕ•Éå¸ ÕÁ‘…Ñ”µ½Ù¥•}±¥ÍÑÌÍ•Ð¹…µ”€ô€Ä°ÕÁ‘…Ñ•‘}…Ð€ô¹½Ü ¤Ý¡•É”¥€ô€È…¹ÕÍ•É}¥€ô€ÌÉ•ÑÕÉ¹¥¹œ€¨œ°m¹½Éµ…±¥é•‘9…µ”°É•Ä¹Á…É…µÌ¹±¥ÍÑ%°ÕÍ•È¹¥‘t¤ì4(€€€€€¥˜€ …É•ÍÕ±Ð¹É½ÝÍlÁt¤É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°€ÐÀÐ°€1¥ÍÐ¹½Ð™½Õ¹¸œ¤ì4(€€€€€É•ÑÕÉ¸É•Ì¹©Í½¸¡ì½¬èÑÉÕ”°¥Ñ•´èÉ•ÍÕ±Ð¹É½ÝÍlÁtô¤ì4(€€€ô…Ñ €¡•ÉÉ½È¤ì4(€€€€€½¹ÍÐÉ½ÕÑ•ÉÉ½È€ô•ÑI½ÕÑ•ÉÉ½È¡•ÉÉ½È¤ì4(€€€€€É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°É½ÕÑ•ÉÉ½È¹ÍÑ…ÑÕÌ°É½ÕÑ•ÉÉ½È¹µ•ÍÍ…”¤ì4(€€€ô4(€ô¤ì4(4(€…ÁÀ¹‘•±•Ñ” œ½…Á¤½±¥ÍÑÌ¼é±¥ÍÑ%œ°…Íå¹Œ€¡É•Ä°É•Ì¤€ôøì4(€€€ÑÉäì4(€€€€€½¹ÍÐìÕÍ•Èô€ô…Ý…¥Ð•ÑÕÑ¡•¹Ñ¥…Ñ•‘UÍ•È¡É•Ä¤ì4(€€€€€½¹ÍÐÉ•ÍÕ±Ð€ô…Ý…¥ÐÅÕ•Éå¸ ‘•±•Ñ”™É½´µ½Ù¥•}±¥ÍÑÌÝ¡•É”¥€ô€Ä…¹ÕÍ•É}¥€ô€Èœ°mÉ•Ä¹Á…É…µÌ¹±¥ÍÑ%°ÕÍ•È¹¥‘t¤ì4(€€€€€¥˜€ …É•ÍÕ±Ð¹É½Ý½Õ¹Ð¤É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°€ÐÀÐ°€1¥ÍÐ¹½Ð™½Õ¹¸œ¤ì4(€€€€€É•ÑÕÉ¸É•Ì¹©Í½¸¡ì½¬èÑÉÕ”ô¤ì4(€€€ô…Ñ €¡•ÉÉ½È¤ì4(€€€€€½¹ÍÐÉ½ÕÑ•ÉÉ½È€ô•ÑI½ÕÑ•ÉÉ½È¡•ÉÉ½È¤ì4(€€€€€É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°É½ÕÑ•ÉÉ½È¹ÍÑ…ÑÕÌ°É½ÕÑ•ÉÉ½È¹µ•ÍÍ…”¤ì4(€€€ô4(€ô¤ì4(4(€…ÁÀ¹Á½ÍÐ œ½…Á¤½±¥ÍÑÌ¼é±¥ÍÑ%½¥Ñ•µÌœ°…Íå¹Œ€¡É•Ä°É•Ì¤€ôøì4(€€€ÑÉäì4(€€€€€½¹ÍÐìÕÍ•Èô€ô…Ý…¥Ð•ÑÕÑ¡•¹Ñ¥…Ñ•‘UÍ•È¡É•Ä¤ì4(€€€€€½¹ÍÐìµ½Ù¥•%°µ•‘¥…QåÁ”ô€ôÉ•Ä¹‰½‘äñðíôì4(€€€€€¥˜€ …µ½Ù¥•%¤É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°€ÐÀÀ°€µ½Ù¥•%¥ÌÉ•ÅÕ¥É•¸œ¤ì4(€€€€€½¹ÍÐ¹½Éµ…±¥é•‘5•‘¥…QåÁ”€ô¹½Éµ…±¥é•5•‘¥…QåÁ”¡µ•‘¥…QåÁ”¤ì4(€€€€€¥˜€ …¹½Éµ…±¥é•‘5•‘¥…QåÁ”¤É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°€ÐÀÀ°€%¹Ù…±¥µ•‘¥„ÑåÁ”¸œ¤ì4(€€€€€½¹ÍÐ±¥ÍÑI•ÍÕ±Ð€ô…Ý…¥ÐÅÕ•Éå¸ Í•±•Ð¥™É½´µ½Ù¥•}±¥ÍÑÌÝ¡•É”¥€ô€Ä…¹ÕÍ•É}¥€ô€È±¥µ¥Ð€Äœ°mÉ•Ä¹Á…É…µÌ¹±¥ÍÑ%°ÕÍ•È¹¥‘t¤ì(€€€€€¥˜€ …±¥ÍÑI•ÍÕ±Ð¹É½ÝÍlÁt¤É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°€ÐÀÐ°€1¥ÍÐ¹½Ð™½Õ¹¸œ¤ì(€€€€€½¹ÍÐ½Õ¹ÑI•ÍÕ±Ð€ô…Ý…¥ÐÅÕ•Éå¸ Í•±•Ð½Õ¹Ð ¨¤èé¥¹Ñ••È…Ì½Õ¹Ð™É½´µ½Ù¥•}±¥ÍÑ}¥Ñ•µÌÝ¡•É”±¥ÍÑ}¥€ô€Äœ°mÉ•Ä¹Á…É…µÌ¹±¥ÍÑ%‘t¤ì(€€€€€¥˜€ ¡½Õ¹ÑI•ÍÕ±Ð¹É½ÝÍlÁtü¹½Õ¹Ðñð€À¤€øô5a}%Q5M}AI}1%MP¤É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°€ÐÀÀ°€1¥ÍÐ¥Ñ•´±¥µ¥ÐÉ•…¡•¸œ¤ì(€€€€€…Ý…¥ÐÅÕ•Éå¸ ¥¹Í•ÉÐ¥¹Ñ¼µ½Ù¥•}±¥ÍÑ}¥Ñ•µÌ€¡±¥ÍÑ}¥°µ½Ù¥•}¥°µ•‘¥…}ÑåÁ”°É•…Ñ•‘}…Ð¤Ù…±Õ•Ì€ Ä°€È°€Ì°¹½Ü ¤¤½¸½¹™±¥Ð€¡±¥ÍÑ}¥°µ•‘¥…}ÑåÁ”°µ½Ù¥•}¥¤‘¼¹½Ñ¡¥¹œœ°mÉ•Ä¹Á…É…µÌ¹±¥ÍÑ%°MÑÉ¥¹œ¡µ½Ù¥•%¤°¹½Éµ…±¥é•‘5•‘¥…QåÁ•t¤ì(€€€€€É•ÑÕÉ¸É•Ì¹©Í½¸¡ì½¬èÑÉÕ”ô¤ì4(€€€ô…Ñ €¡•ÉÉ½È¤ì4(€€€€€½¹ÍÐÉ½ÕÑ•ÉÉ½È€ô•ÑI½ÕÑ•ÉÉ½È¡•ÉÉ½È¤ì4(€€€€€É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°É½ÕÑ•ÉÉ½È¹ÍÑ…ÑÕÌ°É½ÕÑ•ÉÉ½È¹µ•ÍÍ…”¤ì4(€€€ô4(€ô¤ì4(4(€…ÁÀ¹‘•±•Ñ” œ½…Á¤½±¥ÍÑÌ¼é±¥ÍÑ%½¥Ñ•µÌ¼éµ•‘¥…QåÁ”¼éµ½Ù¥•%œ°…Íå¹Œ€¡É•Ä°É•Ì¤€ôøì4(€€€ÑÉäì4(€€€€€½¹ÍÐìÕÍ•Èô€ô…Ý…¥Ð•ÑÕÑ¡•¹Ñ¥…Ñ•‘UÍ•È¡É•Ä¤ì4(€€€€€½¹ÍÐ¹½Éµ…±¥é•‘5•‘¥…QåÁ”€ô¹½Éµ…±¥é•5•‘¥…QåÁ”¡É•Ä¹Á…É…µÌ¹µ•‘¥…QåÁ”¤ì4(€€€€€¥˜€ …¹½Éµ…±¥é•‘5•‘¥…QåÁ”¤É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°€ÐÀÀ°€%¹Ù…±¥µ•‘¥„ÑåÁ”¸œ¤ì4(€€€€€½¹ÍÐ±¥ÍÑI•ÍÕ±Ð€ô…Ý…¥ÐÅÕ•Éå¸ Í•±•Ð¥™É½´µ½Ù¥•}±¥ÍÑÌÝ¡•É”¥€ô€Ä…¹ÕÍ•É}¥€ô€È±¥µ¥Ð€Äœ°mÉ•Ä¹Á…É…µÌ¹±¥ÍÑ%°ÕÍ•È¹¥‘t¤ì4(€€€€€¥˜€ …±¥ÍÑI•ÍÕ±Ð¹É½ÝÍlÁt¤É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°€ÐÀÐ°€1¥ÍÐ¹½Ð™½Õ¹¸œ¤ì4(€€€€€…Ý…¥ÐÅÕ•Éå¸ ‘•±•Ñ”™É½´µ½Ù¥•}±¥ÍÑ}¥Ñ•µÌÝ¡•É”±¥ÍÑ}¥€ô€Ä…¹µ•‘¥…}ÑåÁ”€ô€È…¹µ½Ù¥•}¥€ô€Ìœ°mÉ•Ä¹Á…É…µÌ¹±¥ÍÑ%°¹½Éµ…±¥é•‘5•‘¥…QåÁ”°É•Ä¹Á…É…µÌ¹µ½Ù¥•%‘t¤ì4(€€€€€É•ÑÕÉ¸É•Ì¹©Í½¸¡ì½¬èÑÉÕ”ô¤ì4(€€€ô…Ñ €¡•ÉÉ½È¤ì4(€€€€€½¹ÍÐÉ½ÕÑ•ÉÉ½È€ô•ÑI½ÕÑ•ÉÉ½È¡•ÉÉ½È¤ì4(€€€€€É•ÑÕÉ¸Í•¹‘ÉÉ½È¡É•Ì°É½ÕÑ•ÉÉ½È¹ÍÑ…ÑÕÌ°É½ÕÑ•ÉÉ½È¹µ•ÍÍ…”¤ì4(€€€ô4(€ô¤ì4(4(€É•ÑÕÉ¸…ÁÀì4)ô4(4)¥˜€¡ÁÉ½•ÍÌ¹•¹Ø¹9=}9X€„ôô€Ñ•ÍÐœ€˜˜ÁÉ½•ÍÌ¹…ÉÙlÅt€˜˜¥µÁ½ÉÐ¹µ•Ñ„¹ÕÉ°€ôôôÁ…Ñ¡Q½¥±•UI0¡ÁÉ½•ÍÌ¹…ÉÙlÅt¤¹¡É•˜¤ì(€½¹ÍÐ…ÁÀ€ôÉ•…Ñ•ÁÀ ¤ì(€½¹ÍÐÍ•ÉÙ•È€ô…ÁÀ¹±¥ÍÑ•¸¡A=IP°€ ¤€ôø½¹Í½±”¹±½œ¡A•…­±¥àA$±¥ÍÑ•¹¥¹œ½¸€‘íA=IQõ€¤¤ì(€½¹ÍÐÍ¡ÕÑ‘½Ý¸€ô€¡Í¥¹…°¤€ôøì(€€€½¹Í½±”¹±½œ¡€‘íÍ¥¹…±ôÉ••¥Ù•ì±½Í¥¹œA•…­±¥àA$¹€¤ì(€€€Í•ÉÙ•È¹±½Í”¡…Íå¹Œ€ ¤€ôøì(€€€€€…Ý…¥Ð±½Í•A½½° ¤ì(€€€€€ÁÉ½•ÍÌ¹•á¥Ð À¤ì(€€€ô¤ì(€€€Í•ÑQ¥µ•½ÕÐ  ¤€ôøÁÉ½•ÍÌ¹•á¥Ð Ä¤°€ÄÀÀÀÀ¤¹Õ¹É•˜ ¤ì(€ôì(€ÁÉ½•ÍÌ¹½¸ M%QI4œ°€ ¤€ôøÍ¡ÕÑ‘½Ý¸ M%QI4œ¤¤ì(€ÁÉ½•ÍÌ¹½¸ M%%9Pœ°€ ¤€ôøÍ¡ÕÑ‘½Ý¸ M%%9Pœ¤¤ì)ô(4)•áÁ½ÉÐ‘•™…Õ±ÐÉ•…Ñ•ÁÀì4(

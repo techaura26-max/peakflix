@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
+const API_BASE_URL = String(import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/+$/, '');
 
 interface SecurityQuestion { id: number; question: string }
 interface AuthResponse {
@@ -15,14 +15,21 @@ interface AuthResponse {
 }
 
 async function request<T = AuthResponse>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-    credentials: 'include',
-    ...options,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+      credentials: 'include',
+      ...options,
+    });
+  } catch {
+    throw new Error('Cannot reach the PeakFlix account server. Please try again later.');
+  }
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.ok === false) {
-    throw new Error(data.error || 'Request failed.');
+    throw new Error(data.error || (response.status === 404
+      ? 'The PeakFlix account server is not configured for this website.'
+      : 'Request failed.'));
   }
   return data as T;
 }
