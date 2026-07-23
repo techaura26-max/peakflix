@@ -1,7 +1,8 @@
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
+import { getPreferredLanguage, LANGUAGE_OPTIONS, type LanguageCode } from './languages';
 
-const en = {
+export const en = {
   home: 'Home', movies: 'Movies', series: 'Series', anime: 'Anime', turkishSeries: 'Turkish Series', koreanDrama: 'Korean Drama', library: 'My Library',
   search: 'Search movies, series, anime…', trending: 'Trending', trendingMovies: 'Trending Movies', trendingSeries: 'Trending Series', trendingAnime: 'Trending Anime',
   continueWatching: 'Continue Watching', recommended: 'Recommended for you', play: 'Play now', trailer: 'Watch trailer', details: 'View details', browse: 'Browse collection',
@@ -26,7 +27,7 @@ const en = {
   quickView: 'Quick view', viewingProgress: 'Viewing progress',
 };
 
-const ar: typeof en = {
+export const ar: typeof en = {
   home: 'الرئيسية', movies: 'الأفلام', series: 'المسلسلات', anime: 'الأنمي', turkishSeries: 'مسلسلات تركية', koreanDrama: 'دراما كورية', library: 'مكتبتي',
   search: 'ابحث عن فيلم أو مسلسل أو أنمي…', trending: 'الأكثر رواجًا', trendingMovies: 'أفلام رائجة', trendingSeries: 'مسلسلات رائجة', trendingAnime: 'أنمي رائج',
   continueWatching: 'أكمل المشاهدة', recommended: 'مختارات لك', play: 'شاهد الآن', trailer: 'شاهد الإعلان', details: 'عرض التفاصيل', browse: 'تصفح المحتوى',
@@ -51,16 +52,29 @@ const ar: typeof en = {
   quickView: 'معلومات سريعة', viewingProgress: 'تقدم المشاهدة',
 };
 
-const saved = localStorage.getItem('peakflix-language');
-const browserLanguage = navigator.language?.toLowerCase().startsWith('ar') ? 'ar' : 'en';
-const initialLanguage = saved === 'ar' || saved === 'en' ? saved : browserLanguage;
+const resources = {
+  en: { translation: en },
+  ar: { translation: ar },
+};
+
+const initialLanguage = getPreferredLanguage();
 
 i18n.use(initReactI18next).init({
-  resources: { en: { translation: en }, ar: { translation: ar } },
+  resources,
   lng: initialLanguage,
   fallbackLng: 'en',
-  supportedLngs: ['en', 'ar'],
+  supportedLngs: LANGUAGE_OPTIONS.map(({ code }) => code),
+  load: 'languageOnly',
   interpolation: { escapeValue: false },
 });
+
+export async function ensureLanguage(language: LanguageCode) {
+  if (i18n.hasResourceBundle(language, 'translation')) return;
+  const { generatedTranslations } = await import('./generated-translations');
+  const translation = generatedTranslations[language as keyof typeof generatedTranslations];
+  if (translation) i18n.addResourceBundle(language, 'translation', translation, true, true);
+}
+
+export const i18nReady = ensureLanguage(initialLanguage).then(() => i18n.changeLanguage(initialLanguage));
 
 export default i18n;

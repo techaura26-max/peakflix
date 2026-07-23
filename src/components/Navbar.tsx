@@ -2,6 +2,8 @@ import { BookOpen, Globe2, Menu, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, NavLink, useLocation } from 'react-router-dom';
+import { ensureLanguage } from '../i18n';
+import { LANGUAGE_OPTIONS, normalizeLanguage, type LanguageCode } from '../i18n/languages';
 import { BrandMark } from './BrandMark';
 import { SearchAutocomplete } from './SearchAutocomplete';
 
@@ -9,8 +11,6 @@ const links = [
   ['/', 'home'], ['/category/movie', 'movies'], ['/category/series', 'series'], ['/category/korean-drama', 'koreanDrama'],
   ['/category/anime', 'anime'], ['/category/turkish-series', 'turkishSeries'], ['/library', 'library'],
 ] as const;
-
-const languages = [{ code: 'en', name: 'English' }, { code: 'ar', name: 'العربية' }] as const;
 
 export function Navbar() {
   const { t, i18n } = useTranslation();
@@ -33,7 +33,10 @@ export function Navbar() {
     return () => document.body.classList.remove('menu-open');
   }, [open]);
 
-  const changeLanguage = async (language: 'en' | 'ar') => {
+  const currentLanguage = normalizeLanguage(i18n.resolvedLanguage);
+
+  const changeLanguage = async (language: LanguageCode) => {
+    await ensureLanguage(language);
     await i18n.changeLanguage(language);
     localStorage.setItem('peakflix-language', language);
     setLangOpen(false);
@@ -52,16 +55,18 @@ export function Navbar() {
         <SearchAutocomplete className="mini-search" placeholder={t('search')} />
         <div className="lang-dropdown" ref={langRef}>
           <button type="button" className="icon-btn" aria-label={t('language')} aria-expanded={langOpen} onClick={() => setLangOpen((value) => !value)}>
-            <Globe2 size={19} /><span>{i18n.resolvedLanguage?.toUpperCase()}</span>
+            <Globe2 size={19} /><span>{currentLanguage.toUpperCase()}</span>
           </button>
           {langOpen ? (
             <div className="lang-menu" role="menu">
-              {languages.map((language) => (
+              {LANGUAGE_OPTIONS.map((language) => (
                 <button
                   type="button"
                   role="menuitemradio"
-                  aria-checked={i18n.resolvedLanguage === language.code}
+                  aria-checked={currentLanguage === language.code}
                   key={language.code}
+                  lang={language.code}
+                  title={language.englishName}
                   onClick={() => changeLanguage(language.code)}
                 >
                   {language.name}

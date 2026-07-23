@@ -15,7 +15,8 @@ import {
 
 function toMedia(entry: LibraryEntry): MediaItem {
   return {
-    id: entry.id, title: entry.title, titleAr: entry.titleAr, description: '', descriptionAr: '', year: entry.year,
+    id: entry.id, title: entry.title, titleAr: entry.titleAr, localizedTitle: entry.localizedTitle, localizedLanguage: entry.localizedLanguage,
+    description: '', descriptionAr: '', year: entry.year,
     rating: entry.rating, duration: '', genre: entry.genre || [], genreAr: entry.genreAr || [], genreIds: entry.genreIds || [],
     poster: entry.poster, backdrop: entry.backdrop, trailer: '', video: '', type: entry.type, tmdbType: entry.tmdbType,
   };

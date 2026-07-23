@@ -37,6 +37,9 @@ export interface MediaItem {
   type: MediaType;
   title: string;
   titleAr: string;
+  localizedTitle?: string;
+  localizedDescription?: string;
+  localizedLanguage?: string;
   description: string;
   descriptionAr: string;
   year: number;
@@ -86,6 +89,8 @@ export interface LibraryEntry {
   id: string;
   title: string;
   titleAr: string;
+  localizedTitle?: string;
+  localizedLanguage?: string;
   poster: string;
   backdrop: string;
   rating: number;

@@ -56,7 +56,7 @@ function weightedRating(item: MediaItem) {
 
 export function searchSuggestionScore(item: MediaItem, query: string) {
   const term = normalize(query);
-  const titles = [item.title, item.titleAr, item.originalTitle || ''].map(normalize).filter(Boolean);
+  const titles = [item.title, item.titleAr, item.localizedTitle || '', item.originalTitle || ''].map(normalize).filter(Boolean);
   const exactMatch = titles.some((title) => title === term);
   const prefixMatch = titles.some((title) => title.startsWith(term));
   const wordMatch = titles.some((title) => title.split(/\s+/).some((word) => word.startsWith(term)));
