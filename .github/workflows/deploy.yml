@@ -19,6 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       VITE_TMDB_READ_TOKEN: ${{ secrets.TMDB_READ_TOKEN }}
+      VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,22 +28,17 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          registry-url: https://registry.npmjs.org
+          cache: npm
 
-      - name: Clean install dependencies
-        run: |
-          rm -rf node_modules package-lock.json
-          npm cache clean --force
-          npm install --include=dev --package-lock=false --registry=https://registry.npmjs.org
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Verify dependency tree and TMDB secret
+      - name: Verify required secrets
         run: |
-          node ./node_modules/typescript/bin/tsc --version
-          node ./node_modules/vite/bin/vite.js --version
-          node -e "require('picocolors'); console.log('picocolors OK')"
           test -n "$VITE_TMDB_READ_TOKEN" || (echo "TMDB_READ_TOKEN secret is missing" && exit 1)
+          test -n "$VITE_API_BASE_URL" || (echo "VITE_API_BASE_URL secret is missing" && exit 1)
 
-      - name: Build live TMDB website
+      - name: Build production website
         run: npm run build
 
       - name: Setup GitHub Pages

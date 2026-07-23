@@ -73,7 +73,8 @@ insert into security_questions (id, question) values
   (8, 'What was the model of your first car?'),
   (9, 'What is your favorite book?'),
   (10, 'What was the name of the street where you grew up?')
-on conflict (question) do update set is_active = excluded.is_active;
+on conflict (id) do update
+set question = excluded.question, is_active = true;
 
 do $$
 begin

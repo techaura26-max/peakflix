@@ -2,6 +2,7 @@ import { KeyRound, Mail, Search, ShieldCheck } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { forgotPassword, getSecurityQuestions, resetPassword, verifySecurityAnswer } from '../services/authApi';
+import { DEFAULT_SECURITY_QUESTIONS, type SecurityQuestion } from '../data/securityQuestions';
 
 export function ForgotPasswordPage() {
   const [identifier, setIdentifier] = useState('');
@@ -15,12 +16,12 @@ export function ForgotPasswordPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [questions, setQuestions] = useState<Array<{ id: number; question: string }>>([]);
+  const [questions, setQuestions] = useState<SecurityQuestion[]>(DEFAULT_SECURITY_QUESTIONS);
 
   useEffect(() => {
     getSecurityQuestions().then((result) => {
       if (Array.isArray(result.items) && result.items.length) {
-        const nextQuestions = (result.items as Array<{ id: number; question: string }>);
+        const nextQuestions = (result.items as SecurityQuestion[]).filter((item) => Number.isInteger(item.id) && item.question);
         setQuestions(nextQuestions);
       }
     }).catch(() => undefined);

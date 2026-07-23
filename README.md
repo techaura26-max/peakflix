@@ -1,30 +1,37 @@
 # PeakFlix
 
-## Authentication setup
+PeakFlix is a React streaming-discovery website with a Node/Express account API and PostgreSQL database.
 
-1. Copy [.env.example](.env.example) to .env and fill in the values.
-2. Start the app with `npm run dev`.
+## Run it locally
 
-## Environment variables
+1. Install Node.js 20 or newer.
+2. Run `npm install`.
+3. Copy `.env.example` to `.env` and fill in the values.
+4. Run `npm run migrate` once to create or upgrade the database.
+5. Run `npm run dev`.
 
-Add the following to a .env file at the repository root:
+The website opens at `http://localhost:5173` and the API at `http://localhost:3000`.
 
-```env
-VITE_TMDB_READ_TOKEN=
-DATABASE_URL=postgresql://postgres:YOUR-PASSWORD@db.YOUR-PROJECT.supabase.co:5432/postgres
-JWT_SECRET=change-this-to-a-long-random-secret
-PASSWORD_RESET_SECRET=change-this-to-a-long-random-secret
-FRONTEND_URL=http://localhost:5173
-BCRYPT_ROUNDS=12
-VITE_API_BASE_URL=http://localhost:3000/api
-```
+## Production database and account setup
 
-### Where to add them
-- In the workspace root: [.env.example](.env.example) and a real .env file.
-- The frontend reads VITE_* variables from Vite at build time.
-- The server reads DATABASE_URL, JWT_SECRET, PASSWORD_RESET_SECRET, FRONTEND_URL, and BCRYPT_ROUNDS from the Node process environment.
+Follow [docs/DATABASE_SETUP.md](docs/DATABASE_SETUP.md). It explains, in simple steps, how to:
 
-## Important notes
-- Do not expose database credentials or private secrets in the frontend.
-- The backend currently expects the PostgreSQL tables defined in the database migration files and the runtime environment above.
+- create the Supabase PostgreSQL database;
+- deploy the Express API;
+- connect GitHub Pages to the API;
+- test real user registration;
+- add future database migrations safely.
 
+## Useful commands
+
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Start the frontend and API locally |
+| `npm run server` | Start only the API |
+| `npm run migrate` | Apply new database migrations safely |
+| `npm test` | Run backend tests |
+| `npm run typecheck` | Check TypeScript |
+| `npm run lint` | Run ESLint |
+| `npm run build` | Build the production frontend |
+
+Never commit `.env`, database passwords, JWT secrets, or TMDB tokens to GitHub.

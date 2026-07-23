@@ -49,8 +49,16 @@ export function ProfilePage() {
 
   const syncData = async () => {
     try {
-      const localFavorites = getLibrary('favorites').map((entry) => ({ id: entry.id }));
-      const localHistory = getLibrary('continueWatching').map((entry) => ({ id: entry.id, progressSeconds: 0, durationSeconds: 0, seasonNumber: 1, episodeNumber: 1 }));
+      const localFavorites = getLibrary('favorites').map((entry) => ({
+        id: entry.id,
+        mediaType: entry.tmdbType || (entry.type === 'movie' ? 'movie' : 'tv'),
+      }));
+      const localHistory = getLibrary('continueWatching').map((entry) => ({
+        id: entry.id,
+        mediaType: entry.tmdbType || (entry.type === 'movie' ? 'movie' : 'tv'),
+        progressSeconds: 0,
+        durationSeconds: 0,
+      }));
       await syncLibrary('favorites', localFavorites);
       await syncLibrary('watch_history', localHistory);
       setError('');

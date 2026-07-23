@@ -10,7 +10,8 @@ function buildAppWithQuery(queryImpl, extraDeps = {}) {
   process.env.JWT_SECRET = 'test-jwt';
   process.env.PASSWORD_RESET_SECRET = 'test-reset';
   process.env.FRONTEND_URL = 'http://localhost:5173';
-  return createApp({ query: queryImpl, healthCheck: async () => true, withTransaction: extraDeps.withTransaction, ...extraDeps });
+  const transactionImpl = extraDeps.withTransaction || (async (callback) => callback({ query: queryImpl }));
+  return createApp({ query: queryImpl, healthCheck: async () => true, withTransaction: transactionImpl, ...extraDeps });
 }
 
 function createSessionCookie(user) {
@@ -59,7 +60,7 @@ test('invalid JWT returns 401', async () => {
 test('valid JWT cookie authenticates correctly', async () => {
   const user = { id: 'user-1', username: 'demo', email: 'demo@example.com', country: 'US', language: 'en', security_question_id: 1, session_version: 1, is_active: true };
   const app = buildAppWithQuery(async (text, params) => {
-    if (text.includes('select * from users where id = $1 limit 1')) {
+    if (text.includes('from users where id = $1 limit 1')) {
       assert.deepEqual(params, ['user-1']);
       return { rows: [user] };
     }
@@ -75,6 +76,48 @@ test('valid JWT cookie authenticates correctly', async () => {
     const payload = await response.json();
     assert.equal(payload.ok, true);
     assert.equal(payload.user.username, 'demo');
+  });
+});
+
+test('inactive account cannot use an existing session', async () => {
+  const user = { id: 'user-1', username: 'demo', email: 'demo@example.com', country: 'US', language: 'en', security_question_id: 1, session_version: 1, is_active: false };
+  const app = buildAppWithQuery(async (text) => {
+    if (text.includes('from users where id = $1 limit 1')) return { rows: [user] };
+    return { rows: [] };
+  });
+
+  await withServer(app, async (port) => {
+    const response = await fetch(`http://127.0.0.1:${port}/api/auth/profile`, {
+      method: 'POST',
+      headers: { cookie: createSessionCookie(user) },
+    });
+    assert.equal(response.status, 401);
+    assert.equal((await response.json()).error, 'Account is inactive.');
+  });
+});
+
+test('security question endpoint returns the complete database list', async () => {
+  const questions = Array.from({ length: 10 }, (_, index) => ({ id: index + 1, question: `Question ${index + 1}` }));
+  const app = buildAppWithQuery(async (text) => {
+    if (text.includes('from security_questions')) return { rows: questions };
+    return { rows: [] };
+  });
+
+  await withServer(app, async (port) => {
+    const response = await fetch(`http://127.0.0.1:${port}/api/auth/security-questions`);
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).items.length, 10);
+  });
+});
+
+test('untrusted browser origin is rejected', async () => {
+  const app = buildAppWithQuery(async () => ({ rows: [] }));
+  await withServer(app, async (port) => {
+    const response = await fetch(`http://127.0.0.1:${port}/api/auth/logout`, {
+      method: 'POST',
+      headers: { origin: 'https://evil.example' },
+    });
+    assert.equal(response.status, 403);
   });
 });
 
@@ -95,12 +138,12 @@ test('expired recovery token returns 401', async () => {
 });
 
 test('wrong security answer is rejected', async () => {
-  const recoveryToken = jwt.sign({ sub: 'user-1', purpose: 'security-answer' }, process.env.PASSWORD_RESET_SECRET, { expiresIn: '10m' });
+  const recoveryToken = jwt.sign({ sub: 'user-1', purpose: 'security-answer', sessionVersion: 1 }, process.env.PASSWORD_RESET_SECRET, { expiresIn: '10m' });
   const answerHash = await bcrypt.hash('correct-answer', 12);
   const app = buildAppWithQuery(async (text, params) => {
-    if (text.includes('select id, security_answer_hash, is_active from users where id = $1 limit 1')) {
+    if (text.includes('select id, security_answer_hash, is_active, session_version from users where id = $1 limit 1')) {
       assert.deepEqual(params, ['user-1']);
-      return { rows: [{ id: 'user-1', security_answer_hash: answerHash, is_active: true }] };
+      return { rows: [{ id: 'user-1', security_answer_hash: answerHash, is_active: true, session_version: 1 }] };
     }
     return { rows: [] };
   });
@@ -119,12 +162,12 @@ test('wrong security answer is rejected', async () => {
 });
 
 test('correct security answer returns a password reset token', async () => {
-  const recoveryToken = jwt.sign({ sub: 'user-1', purpose: 'security-answer' }, process.env.PASSWORD_RESET_SECRET, { expiresIn: '10m' });
+  const recoveryToken = jwt.sign({ sub: 'user-1', purpose: 'security-answer', sessionVersion: 1 }, process.env.PASSWORD_RESET_SECRET, { expiresIn: '10m' });
   const answerHash = await bcrypt.hash('correct-answer', 12);
   const app = buildAppWithQuery(async (text, params) => {
-    if (text.includes('select id, security_answer_hash, is_active from users where id = $1 limit 1')) {
+    if (text.includes('select id, security_answer_hash, is_active, session_version from users where id = $1 limit 1')) {
       assert.deepEqual(params, ['user-1']);
-      return { rows: [{ id: 'user-1', security_answer_hash: answerHash, is_active: true }] };
+      return { rows: [{ id: 'user-1', security_answer_hash: answerHash, is_active: true, session_version: 1 }] };
     }
     return { rows: [] };
   });
@@ -158,11 +201,11 @@ test('reset request without token is rejected', async () => {
 });
 
 test('successful reset increments session_version', async () => {
-  const passwordResetToken = jwt.sign({ sub: 'user-1', purpose: 'password-reset' }, process.env.PASSWORD_RESET_SECRET, { expiresIn: '10m' });
+  const passwordResetToken = jwt.sign({ sub: 'user-1', purpose: 'password-reset', sessionVersion: 1 }, process.env.PASSWORD_RESET_SECRET, { expiresIn: '10m' });
   let transactionCalls = 0;
   let updateParams = [];
   const app = buildAppWithQuery(async (text, params) => {
-    if (text.includes('select id, session_version, is_active from users where id = $1 limit 1')) {
+    if (text.includes('select id, session_version, is_active from users where id = $1')) {
       assert.deepEqual(params, ['user-1']);
       return { rows: [{ id: 'user-1', session_version: 1, is_active: true }] };
     }
@@ -201,6 +244,27 @@ test('successful reset increments session_version', async () => {
     assert.equal(payload.ok, true);
     assert.equal(transactionCalls, 1);
     assert.ok(Array.isArray(updateParams) && updateParams.length >= 2);
+  });
+});
+
+test('an already-used password reset token is rejected', async () => {
+  const passwordResetToken = jwt.sign({ sub: 'user-1', purpose: 'password-reset', sessionVersion: 1 }, process.env.PASSWORD_RESET_SECRET, { expiresIn: '10m' });
+  const app = buildAppWithQuery(async () => ({ rows: [] }), {
+    withTransaction: async (callback) => callback({
+      query: async (text) => text.includes('for update')
+        ? { rows: [{ id: 'user-1', session_version: 2, is_active: true }] }
+        : { rows: [] },
+    }),
+  });
+
+  await withServer(app, async (port) => {
+    const response = await fetch(`http://127.0.0.1:${port}/api/auth/reset-password`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ passwordResetToken, password: 'Abc12345', confirmPassword: 'Abc12345' }),
+    });
+    assert.equal(response.status, 401);
+    assert.equal((await response.json()).error, 'Invalid or expired reset token.');
   });
 });
 
@@ -243,7 +307,7 @@ test('signup creates one session without calling login again', async () => {
 test('invalid watch progress returns 400 with the correct validation message', async () => {
   const user = { id: 'user-1', username: 'demo', email: 'demo@example.com', country: 'US', language: 'en', security_question_id: 1, session_version: 1, is_active: true };
   const app = buildAppWithQuery(async (text) => {
-    if (text.includes('select * from users where id = $1 limit 1')) {
+    if (text.includes('from users where id = $1 limit 1')) {
       return { rows: [user] };
     }
     return { rows: [] };
@@ -266,7 +330,7 @@ test('invalid watch progress returns 400 with the correct validation message', a
 test('unknown media type is rejected', async () => {
   const user = { id: 'user-1', username: 'demo', email: 'demo@example.com', country: 'US', language: 'en', security_question_id: 1, session_version: 1, is_active: true };
   const app = buildAppWithQuery(async (text) => {
-    if (text.includes('select * from users where id = $1 limit 1')) {
+    if (text.includes('from users where id = $1 limit 1')) {
       return { rows: [user] };
     }
     return { rows: [] };
@@ -290,7 +354,7 @@ test('favorites normalize series to tv', async () => {
   let insertedParams = [];
   const user = { id: 'user-1', username: 'demo', email: 'demo@example.com', country: 'US', language: 'en', security_question_id: 1, session_version: 1, is_active: true };
   const app = buildAppWithQuery(async (text, params) => {
-    if (text.includes('select * from users where id = $1 limit 1')) {
+    if (text.includes('from users where id = $1 limit 1')) {
       return { rows: [user] };
     }
     if (text.includes('insert into favorites')) {
@@ -317,7 +381,7 @@ test('favorites normalize series to tv', async () => {
 test('duplicate list name returns 409', async () => {
   const user = { id: 'user-1', username: 'demo', email: 'demo@example.com', country: 'US', language: 'en', security_question_id: 1, session_version: 1, is_active: true };
   const app = buildAppWithQuery(async (text) => {
-    if (text.includes('select * from users where id = $1 limit 1')) {
+    if (text.includes('from users where id = $1 limit 1')) {
       return { rows: [user] };
     }
     if (text.includes('insert into movie_lists')) {
@@ -346,7 +410,7 @@ test('duplicate list name returns 409', async () => {
 test('missing owned list returns 404', async () => {
   const user = { id: 'user-1', username: 'demo', email: 'demo@example.com', country: 'US', language: 'en', security_question_id: 1, session_version: 1, is_active: true };
   const app = buildAppWithQuery(async (text) => {
-    if (text.includes('select * from users where id = $1 limit 1')) {
+    if (text.includes('from users where id = $1 limit 1')) {
       return { rows: [user] };
     }
     if (text.includes('delete from movie_lists where id = $1 and user_id = $2')) {
@@ -371,7 +435,7 @@ test('missing owned list returns 404', async () => {
 test('database failure does not return authentication failed', async () => {
   const user = { id: 'user-1', username: 'demo', email: 'demo@example.com', country: 'US', language: 'en', security_question_id: 1, session_version: 1, is_active: true };
   const app = buildAppWithQuery(async (text) => {
-    if (text.includes('select * from users where id = $1 limit 1')) {
+    if (text.includes('from users where id = $1 limit 1')) {
       return { rows: [user] };
     }
     if (text.includes('select * from movie_lists where user_id = $1 order by created_at desc')) {
@@ -398,7 +462,7 @@ test('database failure does not return authentication failed', async () => {
 test('reset database failure does not return 401', async () => {
   const recoveryToken = jwt.sign({ sub: 'user-1', purpose: 'password-reset' }, process.env.PASSWORD_RESET_SECRET, { expiresIn: '10m' });
   const app = buildAppWithQuery(async (text) => {
-    if (text.includes('select id, session_version, is_active from users where id = $1 limit 1')) {
+    if (text.includes('select id, session_version, is_active from users where id = $1')) {
       const error = new Error('connection lost');
       error.code = 'ECONNREFUSED';
       throw error;
@@ -459,7 +523,7 @@ test('multiple watch-history items use correct SQL placeholders in one transacti
   const seen = [];
   const app = buildAppWithQuery(async (text, params) => {
     seen.push({ text, params });
-    if (text.includes('select * from users where id = $1 limit 1')) {
+    if (text.includes('from users where id = $1 limit 1')) {
       return { rows: [{ id: 'user-1', username: 'demo', email: 'demo@example.com', country: 'US', language: 'en', security_question_id: 1, session_version: 1, is_active: true }] };
     }
     return { rows: [] };
@@ -496,5 +560,20 @@ test('multiple watch-history items use correct SQL placeholders in one transacti
     assert.match(queryText, /\$9, \$10, \$11, \$12, \$13, \$14, \$15, \$16/);
     const params = seen.find((entry) => entry.text.includes('insert into watch_history')).params;
     assert.equal(params.length, 16);
+  });
+});
+
+test('library sync rejects oversized batches', async () => {
+  const user = { id: 'user-1', username: 'demo', email: 'demo@example.com', country: 'US', language: 'en', security_question_id: 1, session_version: 1, is_active: true };
+  const app = buildAppWithQuery(async (text) => text.includes('from users where id = $1 limit 1') ? { rows: [user] } : { rows: [] });
+
+  await withServer(app, async (port) => {
+    const response = await fetch(`http://127.0.0.1:${port}/api/library/sync`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: createSessionCookie(user) },
+      body: JSON.stringify({ kind: 'favorites', items: Array.from({ length: 101 }, (_, id) => ({ id, mediaType: 'movie' })) }),
+    });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error, 'Too many items in one sync request.');
   });
 });
