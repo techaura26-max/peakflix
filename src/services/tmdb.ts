@@ -1,51 +1,157 @@
-import type { MediaItem, MediaType } from '../types/media';
+import type { MediaEpisode, MediaItem, MediaSeason, MediaType } from '../types/media';
 
 const API = 'https://api.themoviedb.org/3';
 const IMG = 'https://image.tmdb.org/t/p';
 const token = import.meta.env.VITE_TMDB_READ_TOKEN as string | undefined;
-const cache = new Map<string, { expiresAt: number; value: any }>();
-const CACHE_TTL_MS = 10 * 60 * 1000;
+const MEMORY_CACHE = new Map<string, CacheEntry>();
+const IN_FLIGHT = new Map<string, Promise<any>>();
+const CACHE_PREFIX = 'peakflix-tmdb-v3:';
+const MAX_SESSION_ENTRIES = 70;
+const STALE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+interface CacheEntry<T = any> {
+  value: T;
+  expiresAt: number;
+  staleUntil: number;
+  savedAt: number;
+}
+
+interface RequestOptions {
+  ttl?: number;
+  signal?: AbortSignal;
+}
 
 function authHeaders(): HeadersInit {
-  if (!token) throw new Error('PeakFlix is currently unavailable. Please try again later.');
+  if (!token) throw new Error('PeakFlix needs a TMDB token. Add VITE_TMDB_READ_TOKEN to your environment.');
   return { Authorization: `Bearer ${token}`, accept: 'application/json' };
 }
 
-// دالة ذكية لتحديد لغة طلبات TMDB بناءً على اختيار المستخدم
 function getCurrentLanguage(): string {
   const stored = localStorage.getItem('peakflix-language');
   const browserLang = typeof navigator !== 'undefined' ? navigator.language?.split('-')[0] : '';
   const lang = stored || browserLang || 'en';
-  // تحويل رموز اللغات إلى الشكل القياسي الذي تفضله TMDB
   const langMap: Record<string, string> = {
-    ar: 'ar-SA',
-    en: 'en-US',
-    fr: 'fr-FR',
-    es: 'es-ES',
-    ja: 'ja-JP',
-    it: 'it-IT',
-    de: 'de-DE'
+    ar: 'ar-SA', en: 'en-US', fr: 'fr-FR', es: 'es-ES', ja: 'ja-JP', it: 'it-IT', de: 'de-DE',
   };
   return langMap[lang] || 'en-US';
 }
 
-async function request(path: string, params: Record<string, string | number | boolean | undefined> = {}) {
+function cacheTtl(path: string) {
+  if (path.startsWith('/search/')) return 5 * 60 * 1000;
+  if (path.includes('/season/')) return 6 * 60 * 60 * 1000;
+  if (path.includes('/recommendations') || path.includes('/similar')) return 30 * 60 * 1000;
+  if (path.startsWith('/trending/')) return 15 * 60 * 1000;
+  if (path.startsWith('/discover/')) return 30 * 60 * 1000;
+  return 3 * 60 * 60 * 1000;
+}
+
+function readSessionCache(key: string): CacheEntry | undefined {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(`${CACHE_PREFIX}${key}`) || 'null') as CacheEntry | null;
+    if (!parsed || parsed.staleUntil <= Date.now()) {
+      sessionStorage.removeItem(`${CACHE_PREFIX}${key}`);
+      return undefined;
+    }
+    return parsed;
+  } catch {
+    return undefined;
+  }
+}
+
+function trimSessionCache() {
+  try {
+    const entries: Array<{ key: string; savedAt: number }> = [];
+    for (let index = 0; index < sessionStorage.length; index += 1) {
+      const key = sessionStorage.key(index);
+      if (!key?.startsWith(CACHE_PREFIX)) continue;
+      try {
+        const value = JSON.parse(sessionStorage.getItem(key) || 'null') as CacheEntry | null;
+        entries.push({ key, savedAt: value?.savedAt || 0 });
+      } catch {
+        entries.push({ key, savedAt: 0 });
+      }
+    }
+    entries.sort((a, b) => b.savedAt - a.savedAt).slice(MAX_SESSION_ENTRIES).forEach(({ key }) => sessionStorage.removeItem(key));
+  } catch {
+    // Caching is an optimization; storage failures should never break content loading.
+  }
+}
+
+function saveCache(key: string, value: any, ttl: number) {
+  const now = Date.now();
+  const entry: CacheEntry = { value, savedAt: now, expiresAt: now + ttl, staleUntil: now + ttl + STALE_WINDOW_MS };
+  MEMORY_CACHE.set(key, entry);
+  try {
+    sessionStorage.setItem(`${CACHE_PREFIX}${key}`, JSON.stringify(entry));
+    trimSessionCache();
+  } catch {
+    // Large TMDB payloads can exceed a browser quota; the memory cache remains available.
+  }
+}
+
+function cachedValue(key: string) {
+  const entry = MEMORY_CACHE.get(key) || readSessionCache(key);
+  if (entry) MEMORY_CACHE.set(key, entry);
+  return entry;
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function fetchWithRetry(url: URL, signal?: AbortSignal) {
+  let lastStatus = 0;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const response = await fetch(url, { headers: authHeaders(), signal });
+    lastStatus = response.status;
+    if (response.ok) return response.json();
+
+    if (response.status !== 429 && response.status < 500) break;
+    const retryAfter = Number(response.headers.get('retry-after'));
+    await wait(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 350 * 2 ** attempt);
+  }
+  throw new Error(`PeakFlix could not load this content right now${lastStatus ? ` (${lastStatus})` : ''}. Please try again later.`);
+}
+
+async function request(
+  path: string,
+  params: Record<string, string | number | boolean | undefined> = {},
+  options: RequestOptions = {},
+) {
   const url = new URL(`${API}${path}`);
   Object.entries(params).forEach(([key, value]) => value !== undefined && url.searchParams.set(key, String(value)));
-  const cacheKey = `${path}?${url.searchParams.toString()}`;
-  const cached = cache.get(cacheKey);
+  const key = `${path}?${url.searchParams.toString()}`;
+  const cached = cachedValue(key);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
-  const response = await fetch(url, { headers: authHeaders() });
-  if (!response.ok) throw new Error('PeakFlix could not load this content right now. Please try again later.');
-  const data = await response.json();
-  cache.set(cacheKey, { expiresAt: Date.now() + CACHE_TTL_MS, value: data });
-  return data;
+
+  const load = async () => {
+    try {
+      const value = await fetchWithRetry(url, options.signal);
+      saveCache(key, value, options.ttl ?? cacheTtl(path));
+      return value;
+    } catch (error) {
+      if (cached && cached.staleUntil > Date.now() && !(error instanceof DOMException && error.name === 'AbortError')) {
+        return cached.value;
+      }
+      throw error;
+    }
+  };
+
+  if (options.signal) return load();
+  const pending = IN_FLIGHT.get(key) || load();
+  IN_FLIGHT.set(key, pending);
+  try {
+    return await pending;
+  } finally {
+    if (IN_FLIGHT.get(key) === pending) IN_FLIGHT.delete(key);
+  }
 }
 
 function siteType(tmdbType: 'movie' | 'tv', raw: any, requested?: MediaType): MediaType {
   if (requested) return requested;
   if (tmdbType === 'movie') return raw.original_language === 'ko' ? 'turkish-drama' : 'movie';
-  if ((raw.genre_ids || raw.genres?.map((g: any) => g.id) || []).includes(16)) return 'anime';
+  const genres = raw.genre_ids || raw.genres?.map((genre: any) => genre.id) || [];
+  if (genres.includes(16)) return 'anime';
   if (raw.original_language === 'tr') return 'turkish-series';
   return 'series';
 }
@@ -64,8 +170,9 @@ function mapBasic(raw: any, tmdbType: 'movie' | 'tv', requested?: MediaType): Me
     year: Number(date.slice(0, 4)) || 0,
     rating: Math.round((raw.vote_average || 0) * 10) / 10,
     duration: '',
-    genre: [],
+    genre: (raw.genres || []).map((genre: any) => genre.name),
     genreAr: [],
+    genreIds: raw.genre_ids || (raw.genres || []).map((genre: any) => genre.id),
     poster: raw.poster_path ? `${IMG}/w500${raw.poster_path}` : '',
     backdrop: raw.backdrop_path ? `${IMG}/original${raw.backdrop_path}` : raw.poster_path ? `${IMG}/original${raw.poster_path}` : '',
     trailer: '',
@@ -75,126 +182,153 @@ function mapBasic(raw: any, tmdbType: 'movie' | 'tv', requested?: MediaType): Me
 }
 
 export async function getHomeCatalog(): Promise<{ featured: MediaItem[]; movies: MediaItem[]; series: MediaItem[]; anime: MediaItem[] }> {
-  const lang = getCurrentLanguage();
+  const language = getCurrentLanguage();
   const [allData, movieData, tvData, animeData] = await Promise.all([
-    request('/trending/all/week', { language: lang }),
-    request('/trending/movie/week', { language: lang }),
-    request('/trending/tv/week', { language: lang }),
-    request('/discover/tv', { language: lang, with_genres: 16, sort_by: 'popularity.desc', page: 1 }),
+    request('/trending/all/week', { language }),
+    request('/trending/movie/week', { language }),
+    request('/trending/tv/week', { language }),
+    request('/discover/tv', { language, include_adult: false, with_genres: 16, sort_by: 'popularity.desc', page: 1 }),
   ]);
-  const featured = allData.results.filter((x: any) => x.poster_path).slice(0, 10).map((x: any) => mapBasic(x, x.media_type === 'tv' ? 'tv' : 'movie'));
-  const movies = movieData.results.filter((x: any) => x.poster_path).map((x: any) => mapBasic(x, 'movie'));
-  const series = tvData.results.filter((x: any) => x.poster_path).map((x: any) => mapBasic(x, 'tv'));
-  const anime = animeData.results.filter((x: any) => x.poster_path).map((x: any) => mapBasic(x, 'tv', 'anime'));
+  const featured = allData.results
+    .filter((item: any) => (item.media_type === 'movie' || item.media_type === 'tv') && item.poster_path)
+    .slice(0, 10)
+    .map((item: any) => mapBasic(item, item.media_type));
+  const movies = movieData.results.filter((item: any) => item.poster_path).map((item: any) => mapBasic(item, 'movie'));
+  const series = tvData.results.filter((item: any) => item.poster_path).map((item: any) => mapBasic(item, 'tv'));
+  const anime = animeData.results.filter((item: any) => item.poster_path).map((item: any) => mapBasic(item, 'tv', 'anime'));
   return { featured, movies, series, anime };
 }
 
 export async function getCategory(type: MediaType, page = 1): Promise<{ items: MediaItem[]; featured: MediaItem[]; totalPages: number }> {
-  const lang = getCurrentLanguage();
+  const language = getCurrentLanguage();
   let path = '/discover/movie';
-  const params: Record<string, string | number | boolean> = { language: lang, include_adult: false, sort_by: 'popularity.desc', page };
+  const params: Record<string, string | number | boolean> = { language, include_adult: false, sort_by: 'popularity.desc', page };
   let tmdbType: 'movie' | 'tv' = 'movie';
   if (type === 'series') { path = '/discover/tv'; tmdbType = 'tv'; params.without_genres = 16; }
   if (type === 'anime') { path = '/discover/tv'; tmdbType = 'tv'; params.with_genres = 16; }
   if (type === 'turkish-series') { path = '/discover/tv'; tmdbType = 'tv'; params.with_original_language = 'tr'; }
-  if (type === 'turkish-drama') { path = '/discover/movie'; tmdbType = 'movie'; params.with_original_language = 'ko'; }
+  if (type === 'turkish-drama') { path = '/discover/movie'; params.with_original_language = 'ko'; }
   const data = await request(path, params);
-  const mapped = data.results.filter((x: any) => x.poster_path).map((x: any) => mapBasic(x, tmdbType, type));
-  return {
-    items: mapped,
-    featured: mapped.slice(0, 10),
-    totalPages: Math.min(data.total_pages || 1, 500),
-  };
+  const mapped = data.results.filter((item: any) => item.poster_path).map((item: any) => mapBasic(item, tmdbType, type));
+  return { items: mapped, featured: mapped.slice(0, 10), totalPages: Math.min(data.total_pages || 1, 500) };
 }
 
 export async function searchTitles(query: string, page = 1): Promise<{ items: MediaItem[]; totalPages: number }> {
-  const lang = getCurrentLanguage();
-  const data = await request('/search/multi', { query, language: lang, include_adult: false, page });
-  const results = data.results.filter((x: any) => (x.media_type === 'movie' || x.media_type === 'tv') && x.poster_path);
-  return {
-    items: results.map((x: any) => mapBasic(x, x.media_type)),
-    totalPages: Math.min(data.total_pages || 1, 500),
-  };
+  const data = await request('/search/multi', {
+    query: query.trim(), language: getCurrentLanguage(), include_adult: false, page,
+  });
+  const results = data.results.filter((item: any) => (item.media_type === 'movie' || item.media_type === 'tv') && item.poster_path);
+  return { items: results.map((item: any) => mapBasic(item, item.media_type)), totalPages: Math.min(data.total_pages || 1, 500) };
+}
+
+export async function searchTitleSuggestions(query: string, limit = 7): Promise<MediaItem[]> {
+  const normalized = query.trim().toLocaleLowerCase();
+  if (!normalized) return [];
+  const { items } = await searchTitles(normalized, 1);
+  return items
+    .sort((a, b) => {
+      const aPrefix = a.title.toLocaleLowerCase().startsWith(normalized) ? 1 : 0;
+      const bPrefix = b.title.toLocaleLowerCase().startsWith(normalized) ? 1 : 0;
+      return bPrefix - aPrefix || b.rating - a.rating || b.year - a.year;
+    })
+    .slice(0, limit);
 }
 
 export async function getDetails(id: string): Promise<MediaItem> {
-  const lang = getCurrentLanguage();
   const [tmdbType, rawId] = id.split('-') as ['movie' | 'tv', string];
-  const [mainRes, arRes] = await Promise.all([
-    request(`/${tmdbType}/${rawId}`, { language: lang, append_to_response: 'watch/providers,videos' }),
+  if ((tmdbType !== 'movie' && tmdbType !== 'tv') || !/^\d+$/.test(rawId)) throw new Error('This title link is invalid.');
+  const [main, arabic] = await Promise.all([
+    request(`/${tmdbType}/${rawId}`, { language: getCurrentLanguage(), append_to_response: 'watch/providers,videos' }),
     request(`/${tmdbType}/${rawId}`, { language: 'ar' }),
   ]);
-  const region = mainRes['watch/providers']?.results?.JO || mainRes['watch/providers']?.results?.US;
+  const region = main['watch/providers']?.results?.JO || main['watch/providers']?.results?.US;
   const providerKinds = ['flatrate', 'free', 'ads', 'rent', 'buy'];
-  const providers = [...new Map(providerKinds.flatMap(k => region?.[k] || []).map((p: any) => [p.provider_id, { id: p.provider_id, name: p.provider_name, logo: p.logo_path ? `${IMG}/w92${p.logo_path}` : '' }])).values()] as any[];
-  const trailer = mainRes.videos?.results?.find((v: any) => v.site === 'YouTube' && v.type === 'Trailer' && v.official) || mainRes.videos?.results?.find((v: any) => v.site === 'YouTube' && v.type === 'Trailer');
-  const runtime = tmdbType === 'movie' ? mainRes.runtime : mainRes.episode_run_time?.[0];
-  const date = mainRes.release_date || mainRes.first_air_date || '';
+  const providers = [...new Map(providerKinds.flatMap((kind) => region?.[kind] || []).map((provider: any) => [provider.provider_id, {
+    id: provider.provider_id, name: provider.provider_name, logo: provider.logo_path ? `${IMG}/w92${provider.logo_path}` : '',
+  }])).values()] as any[];
+  const trailer = main.videos?.results?.find((video: any) => video.site === 'YouTube' && video.type === 'Trailer' && video.official)
+    || main.videos?.results?.find((video: any) => video.site === 'YouTube' && video.type === 'Trailer');
+  const runtime = tmdbType === 'movie' ? main.runtime : main.episode_run_time?.[0];
+  const date = main.release_date || main.first_air_date || '';
   return {
-    id: `${tmdbType}-${mainRes.id}`,
-    tmdbId: mainRes.id,
-    tmdbType,
-    type: siteType(tmdbType, mainRes),
-    title: mainRes.title || mainRes.name,
-    titleAr: arRes.title || arRes.name || mainRes.title || mainRes.name,
-    description: mainRes.overview || 'No description available.',
-    descriptionAr: arRes.overview || mainRes.overview || 'لا يوجد وصف متاح.',
+    ...mapBasic(main, tmdbType),
+    titleAr: arabic.title || arabic.name || main.title || main.name,
+    descriptionAr: arabic.overview || main.overview || 'لا يوجد وصف متاح.',
     year: Number(date.slice(0, 4)) || 0,
-    rating: Math.round((mainRes.vote_average || 0) * 10) / 10,
-    duration: runtime ? `${Math.floor(runtime / 60)}h ${String(runtime % 60).padStart(2, '0')}m` : mainRes.number_of_seasons ? `${mainRes.number_of_seasons} Seasons` : '',
-    genre: (mainRes.genres || []).map((g: any) => g.name),
-    genreAr: (arRes.genres || []).map((g: any) => g.name),
-    poster: mainRes.poster_path ? `${IMG}/w500${mainRes.poster_path}` : '',
-    backdrop: mainRes.backdrop_path ? `${IMG}/original${mainRes.backdrop_path}` : '',
+    duration: runtime ? `${Math.floor(runtime / 60)}h ${String(runtime % 60).padStart(2, '0')}m` : main.number_of_seasons ? `${main.number_of_seasons} Seasons` : '',
+    genre: (main.genres || []).map((genre: any) => genre.name),
+    genreAr: (arabic.genres || []).map((genre: any) => genre.name),
+    genreIds: (main.genres || []).map((genre: any) => genre.id),
     trailer: trailer ? `https://www.youtube.com/watch?v=${trailer.key}` : '',
-    video: '',
-    episodes: mainRes.number_of_episodes,
-    seasons: mainRes.number_of_seasons,
+    episodes: main.number_of_episodes,
+    seasons: main.number_of_seasons,
+    seasonList: (main.seasons || []).filter((season: MediaSeason) => season.season_number > 0),
     providers,
-    providerLink: region?.link || `https://www.themoviedb.org/${tmdbType}/${mainRes.id}/watch`,
-    homepage: mainRes.homepage || '',
-    status: mainRes.status || '',
+    providerLink: region?.link || `https://www.themoviedb.org/${tmdbType}/${main.id}/watch`,
+    homepage: main.homepage || '',
+    status: main.status || '',
   };
 }
 
+export async function getSeasonEpisodes(tvId: number | string, season: number): Promise<MediaEpisode[]> {
+  const language = getCurrentLanguage();
+  const localized = await request(`/tv/${tvId}/season/${season}`, { language });
+  if (localized.episodes?.length) return localized.episodes;
+  const fallback = await request(`/tv/${tvId}/season/${season}`, { language: 'en-US' });
+  return fallback.episodes || [];
+}
+
 export async function getRecommendations(id: string, tmdbType: 'movie' | 'tv'): Promise<MediaItem[]> {
-  const lang = getCurrentLanguage();
-  const [, rawId] = id.split('-') as ['movie' | 'tv', string];
+  const language = getCurrentLanguage();
+  const [, rawId] = id.split('-');
   try {
-    const [currentRes, recommendationsRes, similarRes] = await Promise.all([
-      request(`/${tmdbType}/${rawId}`, { language: lang }),
-      request(`/${tmdbType}/${rawId}/recommendations`, { language: lang, page: 1 }),
-      request(`/${tmdbType}/${rawId}/similar`, { language: lang, page: 1 }),
+    const current = await request(`/${tmdbType}/${rawId}`, { language });
+    const genreIds: number[] = (current.genres || []).map((genre: any) => genre.id);
+    const discoverParams: Record<string, string | number | boolean> = {
+      language,
+      include_adult: false,
+      sort_by: 'vote_average.desc',
+      'vote_count.gte': tmdbType === 'movie' ? 120 : 60,
+      page: 1,
+    };
+    if (genreIds.length) discoverParams.with_genres = genreIds.slice(0, 2).join(',');
+
+    const [recommendationsOne, recommendationsTwo, similar, discovered] = await Promise.all([
+      request(`/${tmdbType}/${rawId}/recommendations`, { language, page: 1 }),
+      request(`/${tmdbType}/${rawId}/recommendations`, { language, page: 2 }),
+      request(`/${tmdbType}/${rawId}/similar`, { language, page: 1 }),
+      request(`/discover/${tmdbType}`, discoverParams),
     ]);
 
-    const currentGenres = new Set<number>((currentRes.genres || []).map((g: any) => g.id));
-    const currentLanguage = currentRes.original_language || '';
-    const currentYear = (currentRes.release_date || currentRes.first_air_date || '').slice(0, 4);
-    const recommendationIds = new Set<number>((recommendationsRes.results || []).map((x: any) => x.id));
-
+    const currentGenres = new Set<number>(genreIds);
+    const currentYear = Number((current.release_date || current.first_air_date || '').slice(0, 4));
+    const sourceGroups: Array<[any[], number]> = [
+      [recommendationsOne.results || [], 18],
+      [recommendationsTwo.results || [], 11],
+      [similar.results || [], 8],
+      [discovered.results || [], 4],
+    ];
     const scored = new Map<number, { item: any; score: number }>();
 
-    for (const item of [...(recommendationsRes.results || []), ...(similarRes.results || [])]) {
-      if (!item.poster_path) continue;
-      const genreIds = new Set<number>((item.genre_ids || []).map((id: number) => id));
-      const sharedGenres = [...currentGenres].filter((id) => genreIds.has(id)).length;
-      const sameLanguage = item.original_language === currentLanguage;
-      const itemYear = (item.release_date || item.first_air_date || '').slice(0, 4);
-      const yearDiff = currentYear && itemYear ? Math.abs(Number(currentYear) - Number(itemYear)) : 0;
-      const baseScore = recommendationIds.has(item.id) ? 6 : 2;
-      const score = baseScore + sharedGenres * 2 + (sameLanguage ? 2 : 0) + (yearDiff <= 3 ? 1 : 0);
-
-      const existing = scored.get(item.id);
-      if (existing) {
-        existing.score += score;
-      } else {
-        scored.set(item.id, { item, score });
+    for (const [group, sourceWeight] of sourceGroups) {
+      for (const candidate of group) {
+        if (!candidate.poster_path || candidate.id === current.id) continue;
+        const sharedGenres = (candidate.genre_ids || []).filter((genre: number) => currentGenres.has(genre)).length;
+        const year = Number((candidate.release_date || candidate.first_air_date || '').slice(0, 4));
+        const yearDistance = currentYear && year ? Math.abs(currentYear - year) : 20;
+        const quality = (candidate.vote_average || 0) * 1.3 + Math.log10((candidate.vote_count || 0) + 1) * 2;
+        const languageMatch = candidate.original_language === current.original_language ? 3 : 0;
+        const completeness = candidate.backdrop_path && candidate.overview ? 2 : 0;
+        const score = sourceWeight + sharedGenres * 7 + quality + languageMatch + completeness + Math.max(0, 4 - yearDistance * 0.25);
+        const existing = scored.get(candidate.id);
+        if (existing) existing.score += sourceWeight * 0.45 + sharedGenres * 2;
+        else scored.set(candidate.id, { item: candidate, score });
       }
     }
 
     return [...scored.values()]
       .sort((a, b) => b.score - a.score)
-      .slice(0, 8)
+      .slice(0, 12)
       .map(({ item }) => mapBasic(item, tmdbType));
   } catch {
     return [];

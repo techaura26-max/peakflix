@@ -6,6 +6,23 @@ export interface WatchProvider {
   logo: string;
 }
 
+export interface MediaSeason {
+  id: number;
+  season_number: number;
+  name: string;
+  episode_count: number;
+  poster_path?: string | null;
+}
+
+export interface MediaEpisode {
+  id: number;
+  episode_number: number;
+  name: string;
+  still_path: string | null;
+  overview: string;
+  vote_average: number;
+}
+
 export interface MediaItem {
   id: string;
   tmdbId?: number;
@@ -20,6 +37,7 @@ export interface MediaItem {
   duration: string;
   genre: string[];
   genreAr?: string[];
+  genreIds?: number[];
   poster: string;
   backdrop: string;
   trailer: string;
@@ -27,6 +45,7 @@ export interface MediaItem {
   trending?: boolean;
   episodes?: number;
   seasons?: number;
+  seasonList?: MediaSeason[];
   providers?: WatchProvider[];
   providerLink?: string;
   homepage?: string;
@@ -51,4 +70,10 @@ export interface LibraryEntry {
   type: MediaType;
   tmdbType?: 'movie' | 'tv';
   watchedAt: number;
+  genre?: string[];
+  genreAr?: string[];
+  genreIds?: number[];
+  season?: number;
+  episode?: number;
+  totalEpisodes?: number;
 }
