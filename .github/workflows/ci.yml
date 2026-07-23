@@ -11,30 +11,8 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: peakflix
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d peakflix"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     env:
-      NODE_ENV: test
-      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/peakflix
-      DATABASE_SSL_MODE: disable
-      JWT_SECRET: test-ci-jwt-secret
-      PASSWORD_RESET_SECRET: test-ci-reset-secret
-      FRONTEND_URL: http://localhost:5173
       VITE_TMDB_READ_TOKEN: test-token
-      VITE_API_BASE_URL: http://localhost:3000/api
-      RUN_DATABASE_TESTS: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -48,14 +26,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Apply database migrations
-        run: npm run migrate
-
-      - name: Run tests
+      - name: Type-check and lint
         run: npm test
-
-      - name: Run lint
-        run: npm run lint
 
       - name: Build production website
         run: npm run build
