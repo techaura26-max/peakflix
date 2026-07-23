@@ -1,4 +1,11 @@
-export type MediaType = 'movie' | 'series' | 'anime' | 'turkish-series' | 'turkish-drama';
+export type MediaType = 'movie' | 'series' | 'anime' | 'turkish-series' | 'korean-drama';
+
+export interface MediaPerson {
+  id: number;
+  name: string;
+  role: string;
+  photo: string;
+}
 
 export interface WatchProvider {
   id: number;
@@ -50,6 +57,16 @@ export interface MediaItem {
   providerLink?: string;
   homepage?: string;
   status?: string;
+  popularity?: number;
+  voteCount?: number;
+  originalLanguage?: string;
+  originalTitle?: string;
+  tagline?: string;
+  runtimeMinutes?: number;
+  certification?: string;
+  trailerKey?: string;
+  cast?: MediaPerson[];
+  directors?: string[];
 }
 
 export interface WatchProgress {
@@ -76,4 +93,5 @@ export interface LibraryEntry {
   season?: number;
   episode?: number;
   totalEpisodes?: number;
+  watchedEpisodes?: string[];
 }

@@ -19,8 +19,8 @@ export function MediaCard({
 
   return (
     <motion.article className="media-card" whileHover={{ y: -8, scale: 1.02 }} transition={{ duration: 0.25 }}>
-      <Link to={linkTo || `/title/${item.id}`} className="poster-wrap">
-        {item.poster ? <img src={item.poster} alt={title(item)} loading="lazy" /> : <span className="poster-fallback">PEAKFLIX</span>}
+      <Link to={linkTo || `/title/${item.id}`} className="poster-wrap" aria-label={title(item)}>
+        {item.poster ? <img src={item.poster} srcSet={`${item.poster.replace('/w500', '/w342')} 342w, ${item.poster} 500w`} sizes="(max-width: 700px) 45vw, 220px" alt={title(item)} loading="lazy" decoding="async" width="500" height="750" /> : <span className="poster-fallback">PEAKFLIX</span>}
         <div className="card-overlay">
           <span className="round-play"><Play fill="currentColor" /></span>
         </div>

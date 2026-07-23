@@ -37,7 +37,7 @@ export const media: MediaItem[] = [
     backdrop: 'https://images.unsplash.com/photo-1524231757912-21f4fe3a7200?auto=format&fit=crop&w=2000&q=90', trailer, video: sampleVideo,
   },
   {
-    id: 'red-room', type: 'turkish-drama', title: 'The Red Room', titleAr: 'الغرفة الحمراء',
+    id: 'red-room', type: 'korean-drama', title: 'The Red Room', titleAr: 'الغرفة الحمراء',
     description: 'Every confession opens another door into a dangerous past.',
     descriptionAr: 'كل اعتراف يفتح باباً جديداً إلى ماضٍ خطير.',
     year: 2024, rating: 8.4, duration: '16 Episodes', genre: ['Drama', 'Mystery'], trending: true, episodes: 16,

@@ -5,6 +5,7 @@ const LIBRARY_KEYS = {
   history: 'peakflix-library-history-v2',
   favorites: 'peakflix-library-favorites-v2',
   watchLater: 'peakflix-library-watch-later-v2',
+  watched: 'peakflix-library-watched-v2',
 } as const;
 
 const LEGACY_KEYS = {
@@ -12,15 +13,28 @@ const LEGACY_KEYS = {
   history: 'cinevault-library-history',
   favorites: 'cinevault-library-favorites',
   watchLater: 'cinevault-library-watch-later',
+  watched: 'cinevault-library-watched',
 } as const;
 
-type LibraryKind = keyof typeof LIBRARY_KEYS;
+export type LibraryKind = keyof typeof LIBRARY_KEYS;
 const MAX_ENTRIES: Record<LibraryKind, number> = {
   continueWatching: 30,
   history: 50,
   favorites: 100,
   watchLater: 100,
+  watched: 150,
 };
+
+export interface LibraryBackup {
+  app: 'PeakFlix';
+  version: 1;
+  exportedAt: string;
+  libraries: Record<LibraryKind, LibraryEntry[]>;
+}
+
+function notifyLibraryChanged() {
+  window.dispatchEvent(new CustomEvent('peakflix-library-change'));
+}
 
 function parseEntries(raw: string | null): LibraryEntry[] {
   if (!raw) return [];
@@ -75,6 +89,7 @@ function toLibraryEntry(item: MediaItem, previous?: LibraryEntry): LibraryEntry 
     season: previous?.season,
     episode: previous?.episode,
     totalEpisodes: previous?.totalEpisodes,
+    watchedEpisodes: previous?.watchedEpisodes,
   };
 }
 
@@ -88,6 +103,7 @@ export function saveLibraryEntry(kind: LibraryKind, item: MediaItem) {
   const normalized = toLibraryEntry(item, previous);
   const next = [normalized, ...entries.filter((entry) => entry.id !== item.id)];
   writeEntries(kind, next);
+  notifyLibraryChanged();
   return next;
 }
 
@@ -103,6 +119,7 @@ export function saveWatchProgress(item: MediaItem, season?: number, episode?: nu
   const next = [normalized, ...entries.filter((entry) => entry.id !== item.id)];
   writeEntries('continueWatching', next);
   saveLibraryEntry('history', item);
+  notifyLibraryChanged();
   return normalized;
 }
 
@@ -115,6 +132,7 @@ export function toggleLibraryEntry(kind: LibraryKind, item: MediaItem) {
   const existing = entries.find((entry) => entry.id === item.id);
   if (existing) {
     writeEntries(kind, entries.filter((entry) => entry.id !== item.id));
+    notifyLibraryChanged();
     return false;
   }
   saveLibraryEntry(kind, item);
@@ -123,4 +141,75 @@ export function toggleLibraryEntry(kind: LibraryKind, item: MediaItem) {
 
 export function removeLibraryEntry(kind: LibraryKind, id: string) {
   writeEntries(kind, readEntries(kind).filter((entry) => entry.id !== id));
+  notifyLibraryChanged();
+}
+
+export function clearLibrary(kind: LibraryKind) {
+  writeEntries(kind, []);
+  notifyLibraryChanged();
+}
+
+export function isInLibrary(kind: LibraryKind, id: string) {
+  return readEntries(kind).some((entry) => entry.id === id);
+}
+
+function episodeKey(season: number, episode: number) {
+  return `${season}:${episode}`;
+}
+
+export function isEpisodeWatched(mediaId: string, season: number, episode: number) {
+  const entry = readEntries('continueWatching').find((value) => value.id === mediaId)
+    || readEntries('history').find((value) => value.id === mediaId);
+  return entry?.watchedEpisodes?.includes(episodeKey(season, episode)) || false;
+}
+
+export function toggleEpisodeWatched(item: MediaItem, season: number, episode: number) {
+  const key = episodeKey(season, episode);
+  const entries = readEntries('continueWatching');
+  const previous = entries.find((entry) => entry.id === item.id);
+  const watchedEpisodes = new Set(previous?.watchedEpisodes || []);
+  if (watchedEpisodes.has(key)) watchedEpisodes.delete(key);
+  else watchedEpisodes.add(key);
+  const normalized: LibraryEntry = {
+    ...toLibraryEntry(item, previous),
+    season: previous?.season || season,
+    episode: previous?.episode || episode,
+    totalEpisodes: previous?.totalEpisodes,
+    watchedEpisodes: [...watchedEpisodes],
+  };
+  writeEntries('continueWatching', [normalized, ...entries.filter((entry) => entry.id !== item.id)]);
+  notifyLibraryChanged();
+  return watchedEpisodes.has(key);
+}
+
+export function createLibraryBackup(): LibraryBackup {
+  return {
+    app: 'PeakFlix',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    libraries: {
+      continueWatching: readEntries('continueWatching'),
+      history: readEntries('history'),
+      favorites: readEntries('favorites'),
+      watchLater: readEntries('watchLater'),
+      watched: readEntries('watched'),
+    },
+  };
+}
+
+export function restoreLibraryBackup(value: unknown) {
+  if (!value || typeof value !== 'object') throw new Error('Invalid PeakFlix backup.');
+  const backup = value as Partial<LibraryBackup>;
+  if (backup.app !== 'PeakFlix' || backup.version !== 1 || !backup.libraries) {
+    throw new Error('This file is not a supported PeakFlix backup.');
+  }
+  (Object.keys(LIBRARY_KEYS) as LibraryKind[]).forEach((kind) => {
+    const imported = Array.isArray(backup.libraries?.[kind]) ? backup.libraries[kind] : [];
+    const valid = imported.filter((entry): entry is LibraryEntry => (
+      Boolean(entry) && typeof entry.id === 'string' && typeof entry.title === 'string'
+    ));
+    const merged = [...valid, ...readEntries(kind)];
+    writeEntries(kind, [...new Map(merged.map((entry) => [entry.id, entry])).values()]);
+  });
+  notifyLibraryChanged();
 }

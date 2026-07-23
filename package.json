@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "typecheck": "tsc -b --pretty false",
-    "test": "npm run typecheck && npm run lint"
+    "test:unit": "vitest run",
+    "test": "npm run typecheck && npm run lint && npm run test:unit"
   },
   "dependencies": {
     "@vitejs/plugin-react": "5.2.0",
@@ -25,12 +26,16 @@
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/react": "^16.3.2",
     "@types/react": "18.3.18",
     "@types/react-dom": "18.3.5",
     "eslint": "9.39.5",
     "eslint-plugin-react-hooks": "5.1.0",
     "eslint-plugin-react-refresh": "0.4.16",
     "globals": "15.14.0",
-    "typescript-eslint": "8.19.1"
+    "jsdom": "^29.1.1",
+    "typescript-eslint": "8.19.1",
+    "vitest": "^4.1.10"
   }
 }
