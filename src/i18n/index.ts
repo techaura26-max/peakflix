@@ -23,6 +23,7 @@ const en = {
   tmdbAttribution: 'This product uses the TMDB API but is not endorsed or certified by TMDB.', allRights: 'Demo and entertainment project.',
   somethingWrong: 'Something went wrong', unexpectedError: 'The page hit an unexpected error. You can safely return home and try again.', backHome: 'Back to home',
   navigation: 'Primary navigation', openMenu: 'Open menu', closeMenu: 'Close menu', language: 'Language', skipContent: 'Skip to content', slide: 'Go to slide {{number}}', previousSlide: 'Previous title', nextSlide: 'Next title',
+  quickView: 'Quick view', viewingProgress: 'Viewing progress',
 };
 
 const ar: typeof en = {
@@ -47,6 +48,7 @@ const ar: typeof en = {
   tmdbAttribution: 'يستخدم هذا المنتج واجهة TMDB، لكنه غير معتمد أو مصدّق من TMDB.', allRights: 'مشروع تجريبي وترفيهي.',
   somethingWrong: 'حدث خطأ', unexpectedError: 'واجهت الصفحة خطأ غير متوقع. يمكنك العودة للرئيسية والمحاولة مجددًا بأمان.', backHome: 'العودة للرئيسية',
   navigation: 'التنقل الرئيسي', openMenu: 'فتح القائمة', closeMenu: 'إغلاق القائمة', language: 'اللغة', skipContent: 'انتقل إلى المحتوى', slide: 'الانتقال إلى الشريحة {{number}}', previousSlide: 'العنوان السابق', nextSlide: 'العنوان التالي',
+  quickView: 'معلومات سريعة', viewingProgress: 'تقدم المشاهدة',
 };
 
 const saved = localStorage.getItem('peakflix-language');

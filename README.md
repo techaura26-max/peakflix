@@ -4,11 +4,13 @@ PeakFlix is a production-style React and TypeScript media discovery website powe
 
 ## Highlights
 
-- Live autocomplete ranked by title match, popularity, rating, and vote confidence
+- Bilingual, typo-tolerant live autocomplete ranked by title match, popularity, rating, and vote confidence
+- Quick title previews that keep visitors on the current catalog page
 - Advanced search filters for media type, genre, original language, year, and rating
 - Personalized recommendations based on local favorites, watch later, history, watched titles, and recent activity
 - Detailed title pages with trailers, cast, directors, ratings, runtime, seasons, providers, sharing, and similar picks
-- Browser-only library with favorites, watch later, history, watched titles, episode progress, export, and import
+- Browser-only library with favorites, watch later, history, watched titles, exact player progress when provided, export, and import
+- Previous/next episode navigation across season boundaries and VidSrcPM as the first player option
 - Installable PWA with an offline shell, persistent TMDB cache, update notices, responsive navigation, and reduced-motion support
 - English and Arabic interfaces; each visitor sees one selected language, saved in the browser
 - SEO metadata, structured movie/TV data, legal pages, TMDB attribution, error boundaries, and automated tests
@@ -37,7 +39,7 @@ The website opens at `http://localhost:5173`. In GitHub Codespaces, open forward
 ## Privacy and browser storage
 
 - No passwords, profiles, or personal account data are collected.
-- Favorites, history, search terms, watched episodes, and the last selected season and episode stay in `localStorage` on the visitor's device.
+- Favorites, history, search terms, watched episodes, player time updates, and the last selected season and episode stay in `localStorage` on the visitor's device.
 - The library can be exported to JSON and imported into another browser.
 - Clearing the browser's site data removes the local library and progress.
 - TMDB responses use persistent browser caching with expiration, stale fallback, request deduplication, retry handling, and quota cleanup.

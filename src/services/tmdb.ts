@@ -31,7 +31,7 @@ function authHeaders(): HeadersInit {
 function getCurrentLanguage(): string {
   const stored = localStorage.getItem('peakflix-language');
   const browserLang = typeof navigator !== 'undefined' ? navigator.language?.split('-')[0] : '';
-  const lang = stored || browserLang || 'en';
+  const lang = stored || i18n.resolvedLanguage || browserLang || 'en';
   const langMap: Record<string, string> = {
     ar: 'ar-SA', en: 'en-US', fr: 'fr-FR', es: 'es-ES', ja: 'ja-JP', it: 'it-IT', de: 'de-DE',
   };
@@ -225,12 +225,87 @@ export async function getCategory(type: MediaType, page = 1): Promise<{ items: M
   return { items: mapped, featured: mapped.slice(0, 10), totalPages: Math.min(data.total_pages || 1, 500) };
 }
 
+function localizedSearchItem(
+  active: any,
+  english: any,
+  arabic: any,
+  tmdbType: 'movie' | 'tv',
+): MediaItem {
+  const base = active || english || arabic;
+  const item = mapBasic(base, tmdbType);
+  const englishTitle = english?.title || english?.name;
+  const arabicTitle = arabic?.title || arabic?.name;
+  return {
+    ...item,
+    title: englishTitle || item.title,
+    titleAr: arabicTitle || item.title,
+    description: english?.overview || item.description,
+    descriptionAr: arabic?.overview || item.description,
+    originalTitle: english?.original_title || english?.original_name || base.original_title || base.original_name || '',
+  };
+}
+
 export async function searchTitles(query: string, page = 1): Promise<{ items: MediaItem[]; totalPages: number }> {
-  const data = await request('/search/multi', {
-    query: query.trim(), language: getCurrentLanguage(), include_adult: false, page,
-  });
-  const results = data.results.filter((item: any) => (item.media_type === 'movie' || item.media_type === 'tv') && item.poster_path);
-  return { items: results.map((item: any) => mapBasic(item, item.media_type)), totalPages: Math.min(data.total_pages || 1, 500) };
+  const normalized = query.trim();
+  if (!normalized) return { items: [], totalPages: 1 };
+  const currentLanguage = getCurrentLanguage();
+  const languages = [...new Set([currentLanguage, 'en-US', 'ar-SA'])];
+  const loadGroups = async (searchQuery: string, searchPage: number) => {
+    const results = await Promise.allSettled(languages.map(async (language) => ({
+      language,
+      data: await request('/search/multi', {
+        query: searchQuery, language, include_adult: false, page: searchPage,
+      }),
+    })));
+    return {
+      results,
+      groups: results
+        .filter((result): result is PromiseFulfilledResult<{ language: string; data: any }> => result.status === 'fulfilled')
+        .map((result) => result.value),
+    };
+  };
+  const primary = await loadGroups(normalized, page);
+  const groupResults = primary.results;
+  const groups = primary.groups;
+  if (!groups.length) {
+    const failure = groupResults.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+    throw failure?.reason || new Error(i18n.t('offlineError'));
+  }
+
+  const candidates = new Map<string, { tmdbType: 'movie' | 'tv'; values: Map<string, any> }>();
+  const addCandidates = (sourceGroups: typeof groups) => {
+    sourceGroups.forEach(({ data, language }) => {
+      (data.results || []).forEach((raw: any) => {
+        if ((raw.media_type !== 'movie' && raw.media_type !== 'tv') || !raw.poster_path) return;
+        const key = `${raw.media_type}-${raw.id}`;
+        const candidate = candidates.get(key) || { tmdbType: raw.media_type, values: new Map<string, any>() };
+        candidate.values.set(language, raw);
+        candidates.set(key, candidate);
+      });
+    });
+  };
+  addCandidates(groups);
+
+  if (!candidates.size && page === 1) {
+    const words = normalized.split(/\s+/).filter((word) => word.length >= 3);
+    const compact = normalized.replace(/\s+/g, ' ');
+    const rescueTerms = [...new Set([
+      ...words.sort((left, right) => right.length - left.length),
+      compact.length >= 5 ? compact.slice(0, -1) : '',
+      compact.length >= 6 ? compact.slice(0, -2) : '',
+    ].filter((term) => term && term.toLocaleLowerCase() !== compact.toLocaleLowerCase()))].slice(0, 3);
+    const rescueResults = await Promise.all(rescueTerms.map((term) => loadGroups(term, 1)));
+    rescueResults.forEach((result) => addCandidates(result.groups));
+  }
+
+  const items = [...candidates.values()].map(({ tmdbType, values }) => localizedSearchItem(
+    values.get(currentLanguage) || values.values().next().value,
+    values.get('en-US'),
+    values.get('ar-SA'),
+    tmdbType,
+  ));
+  const totalPages = Math.max(...groups.map(({ data }) => Math.min(data.total_pages || 1, 500)), 1);
+  return { items: rankSearchSuggestions(items, normalized, items.length), totalPages };
 }
 
 export async function searchTitleSuggestions(query: string, limit = 7): Promise<MediaItem[]> {
