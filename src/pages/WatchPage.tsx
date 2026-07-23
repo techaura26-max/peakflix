@@ -187,8 +187,7 @@ export function WatchPage() {
           title={`${title(item)} player`}
           allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
           allowFullScreen
-          sandbox="allow-scripts allow-same-origin allow-forms"
-          referrerPolicy="no-referrer"
+          referrerPolicy="origin"
         />
       </div>
 
