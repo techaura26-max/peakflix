@@ -1,6 +1,17 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { MediaItem } from '../types/media';
-import { createLibraryBackup, getLibrary, getWatchProgress, restoreLibraryBackup, saveWatchProgress, toggleEpisodeWatched, toggleLibraryEntry } from './library';
+import {
+  createLibraryBackup,
+  getCardProgress,
+  getLibrary,
+  getPlaybackPosition,
+  getWatchProgress,
+  restoreLibraryBackup,
+  savePlaybackPosition,
+  saveWatchProgress,
+  toggleEpisodeWatched,
+  toggleLibraryEntry,
+} from './library';
 
 const item: MediaItem = {
   id: 'tv-1396', tmdbId: 1396, tmdbType: 'tv', type: 'series', title: 'Breaking Bad', titleAr: 'اختلال ضال',
@@ -19,6 +30,20 @@ describe('browser library', () => {
   it('tracks watched episodes independently', () => {
     expect(toggleEpisodeWatched(item, 2, 4)).toBe(true);
     expect(toggleEpisodeWatched(item, 2, 4)).toBe(false);
+  });
+
+  it('stores a precise local playback position for a series episode', () => {
+    saveWatchProgress(item, 2, 4, 10);
+    savePlaybackPosition(item, 900, 1800, 2, 4, 10);
+    expect(getPlaybackPosition(item.id, 2, 4)).toMatchObject({ currentTime: 900, duration: 1800 });
+    expect(getCardProgress(item.id)).toBeCloseTo(35);
+  });
+
+  it('uses movie playback time for card progress', () => {
+    const movie = { ...item, id: 'movie-1', tmdbType: 'movie' as const, type: 'movie' as const };
+    saveWatchProgress(movie);
+    savePlaybackPosition(movie, 1800, 7200);
+    expect(getCardProgress(movie.id)).toBeCloseTo(25);
   });
 
   it('exports and restores a validated backup', () => {

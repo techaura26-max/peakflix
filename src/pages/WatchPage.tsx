@@ -1,19 +1,27 @@
 import { ArrowLeft, ArrowRight, CheckCircle2, Film, Server, Star, Tv } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router-dom';
 import { RecommendationsRow } from '../components/RecommendationsRow';
 import { useLocalizedMedia } from '../hooks/useLocalizedMedia';
 import { getDetails, getRecommendations, getSeasonEpisodes } from '../services/tmdb';
 import type { MediaEpisode, MediaItem, MediaSeason } from '../types/media';
-import { getWatchProgress, isEpisodeWatched, saveWatchProgress, toggleEpisodeWatched } from '../utils/library';
+import {
+  getPlaybackPosition,
+  getWatchProgress,
+  isEpisodeWatched,
+  savePlaybackPosition,
+  saveWatchProgress,
+  toggleEpisodeWatched,
+} from '../utils/library';
 import { ErrorState, LoadingState } from '../components/PageState';
 import { Seo } from '../components/Seo';
+import { parsePlayerProgressMessage } from '../utils/playback';
 
-const SERVERS = ['VidSrc', 'VidSrcPM', 'SmashyStream', 'MultiEmbed'] as const;
-type ServerName = typeof SERVERS[number];
+export const STREAMING_SERVERS = ['VidSrcPM', 'VidSrc', 'SmashyStream', 'MultiEmbed'] as const;
+type ServerName = typeof STREAMING_SERVERS[number];
 
-function streamUrl(server: ServerName, tmdbId: number, isTv: boolean, season: number, episode: number) {
+export function streamUrl(server: ServerName, tmdbId: number, isTv: boolean, season: number, episode: number) {
   const tvSuffix = `season=${season}&episode=${episode}`;
   if (server === 'VidSrc') return isTv ? `https://vidsrc.me/embed/tv?tmdb=${tmdbId}&${tvSuffix}` : `https://vidsrc.me/embed/movie?tmdb=${tmdbId}`;
   if (server === 'VidSrcPM') return isTv ? `https://vidsrc.pm/embed/tv?tmdb=${tmdbId}&${tvSuffix}` : `https://vidsrc.pm/embed/movie?tmdb=${tmdbId}`;
@@ -31,7 +39,7 @@ export function WatchPage() {
   const [seasons, setSeasons] = useState<MediaSeason[]>([]);
   const [episodes, setEpisodes] = useState<MediaEpisode[]>([]);
   const [recommendations, setRecommendations] = useState<MediaItem[]>([]);
-  const [activeServer, setActiveServer] = useState<ServerName>('VidSrc');
+  const [activeServer, setActiveServer] = useState<ServerName>('VidSrcPM');
   const savedProgress = useMemo(() => getWatchProgress(id), [id]);
   const [activeSeason, setActiveSeason] = useState(savedProgress?.season || 1);
   const [activeEpisode, setActiveEpisode] = useState(savedProgress?.episode || 1);
@@ -40,6 +48,8 @@ export function WatchPage() {
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
   const [, setWatchedVersion] = useState(0);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const lastPlayerSave = useRef(0);
   const language = i18n.resolvedLanguage || localStorage.getItem('peakflix-language') || 'en';
   const ar = language === 'ar';
   const isTv = item?.tmdbType === 'tv' || id.startsWith('tv-');
@@ -91,10 +101,56 @@ export function WatchPage() {
     saveWatchProgress(item, isTv ? activeSeason : undefined, isTv ? activeEpisode : undefined, isTv ? episodes.length : undefined);
   }, [activeEpisode, activeSeason, episodes.length, isTv, item]);
 
+  useEffect(() => {
+    if (!item) return;
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== iframeRef.current?.contentWindow) return;
+      const progress = parsePlayerProgressMessage(event.data);
+      if (!progress || Date.now() - lastPlayerSave.current < 2500) return;
+      lastPlayerSave.current = Date.now();
+      savePlaybackPosition(
+        item,
+        progress.currentTime,
+        progress.duration,
+        isTv ? activeSeason : undefined,
+        isTv ? activeEpisode : undefined,
+        isTv ? episodes.length : undefined,
+      );
+      setWatchedVersion((value) => value + 1);
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [activeEpisode, activeSeason, episodes.length, isTv, item]);
+
   const stream = item?.tmdbId ? streamUrl(activeServer, item.tmdbId, isTv, activeSeason, activeEpisode) : '';
   const currentEpisodeIndex = episodes.findIndex((episode) => episode.episode_number === activeEpisode);
-  const canGoBack = currentEpisodeIndex > 0;
-  const canGoForward = currentEpisodeIndex >= 0 && currentEpisodeIndex < episodes.length - 1;
+  const currentSeasonIndex = seasons.findIndex((season) => season.season_number === activeSeason);
+  const canGoBack = currentEpisodeIndex > 0 || currentSeasonIndex > 0;
+  const canGoForward = (currentEpisodeIndex >= 0 && currentEpisodeIndex < episodes.length - 1)
+    || (currentSeasonIndex >= 0 && currentSeasonIndex < seasons.length - 1);
+  const savedPosition = getPlaybackPosition(id, isTv ? activeSeason : undefined, isTv ? activeEpisode : undefined);
+
+  const goBack = () => {
+    if (currentEpisodeIndex > 0) {
+      setActiveEpisode(episodes[currentEpisodeIndex - 1].episode_number);
+      return;
+    }
+    const previousSeason = seasons[currentSeasonIndex - 1];
+    if (!previousSeason) return;
+    setActiveSeason(previousSeason.season_number);
+    setActiveEpisode(Math.max(1, previousSeason.episode_count));
+  };
+
+  const goForward = () => {
+    if (currentEpisodeIndex >= 0 && currentEpisodeIndex < episodes.length - 1) {
+      setActiveEpisode(episodes[currentEpisodeIndex + 1].episode_number);
+      return;
+    }
+    const nextSeason = seasons[currentSeasonIndex + 1];
+    if (!nextSeason) return;
+    setActiveSeason(nextSeason.season_number);
+    setActiveEpisode(1);
+  };
 
   if (loading) return <div className="page-shell"><LoadingState cards={4} /></div>;
   if (error || !item) return <div className="page-shell"><ErrorState message={error} onRetry={() => setAttempt((value) => value + 1)} /></div>;
@@ -108,18 +164,23 @@ export function WatchPage() {
           <small>{isTv ? <Tv size={13} /> : <Film size={13} />}{isTv ? t('seriesPlayer') : t('moviePlayer')}</small>
           <h1>{title(item)} {isTv ? <span>{t('season')} {activeSeason} · {t('episode')} {activeEpisode}</span> : null}</h1>
         </div>
-        <span className="watch-saved"><CheckCircle2 size={15} />{t('progressSaved')}</span>
+        <span className="watch-saved">
+          <CheckCircle2 size={15} />
+          {t('progressSaved')}
+          {savedPosition?.currentTime ? ` · ${Math.floor(savedPosition.currentTime / 60)} ${t('minuteShort')}` : ''}
+        </span>
       </div>
 
       <div className="server-picker" aria-label={t('streamingServers')}>
         <span><Server size={16} />{t('chooseServer')}</span>
-        {SERVERS.map((server) => (
+        {STREAMING_SERVERS.map((server) => (
           <button key={server} className={server === activeServer ? 'is-active' : ''} onClick={() => setActiveServer(server)}>{server}</button>
         ))}
       </div>
 
       <div className="player-frame">
         <iframe
+          ref={iframeRef}
           key={`${activeServer}-${activeSeason}-${activeEpisode}`}
           src={stream}
           title={`${title(item)} player`}
@@ -131,10 +192,10 @@ export function WatchPage() {
 
       {isTv && episodes.length ? (
         <div className="episode-navigation">
-          <button disabled={!canGoBack} onClick={() => setActiveEpisode(episodes[currentEpisodeIndex - 1].episode_number)}>
+          <button disabled={!canGoBack} onClick={goBack}>
             <ArrowLeft size={17} />{t('previousEpisode')}
           </button>
-          <button disabled={!canGoForward} onClick={() => setActiveEpisode(episodes[currentEpisodeIndex + 1].episode_number)}>
+          <button disabled={!canGoForward} onClick={goForward}>
             {t('nextEpisode')}<ArrowRight size={17} />
           </button>
         </div>

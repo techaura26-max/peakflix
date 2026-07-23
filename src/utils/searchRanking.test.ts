@@ -32,4 +32,11 @@ describe('rankSearchSuggestions', () => {
     ], 'Dune');
     expect(results[0].title).toBe('Dune: Part Two');
   });
+
+  it('tolerates a small spelling mistake and matches either title language', () => {
+    const breakingBad = media({ id: 'tv-1', title: 'Breaking Bad', titleAr: 'اختلال ضال', popularity: 80, voteCount: 5000 });
+    const unrelated = media({ id: 'movie-2', title: 'Bad Boys', titleAr: 'فتيان أشقياء', popularity: 85, voteCount: 5000 });
+    expect(rankSearchSuggestions([unrelated, breakingBad], 'Breking Bad')[0].id).toBe(breakingBad.id);
+    expect(rankSearchSuggestions([unrelated, breakingBad], 'اختلال ضال')[0].id).toBe(breakingBad.id);
+  });
 });

@@ -76,6 +76,12 @@ export interface WatchProgress {
   updatedAt: number;
 }
 
+export interface PlaybackPosition {
+  currentTime: number;
+  duration: number;
+  updatedAt: number;
+}
+
 export interface LibraryEntry {
   id: string;
   title: string;
@@ -94,4 +100,6 @@ export interface LibraryEntry {
   episode?: number;
   totalEpisodes?: number;
   watchedEpisodes?: string[];
+  playback?: PlaybackPosition;
+  episodePlayback?: Record<string, PlaybackPosition>;
 }

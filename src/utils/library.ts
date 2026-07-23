@@ -1,4 +1,4 @@
-import type { LibraryEntry, MediaItem } from '../types/media';
+import type { LibraryEntry, MediaItem, PlaybackPosition } from '../types/media';
 
 const LIBRARY_KEYS = {
   continueWatching: 'peakflix-library-continue-watching-v2',
@@ -90,6 +90,8 @@ function toLibraryEntry(item: MediaItem, previous?: LibraryEntry): LibraryEntry 
     episode: previous?.episode,
     totalEpisodes: previous?.totalEpisodes,
     watchedEpisodes: previous?.watchedEpisodes,
+    playback: previous?.playback,
+    episodePlayback: previous?.episodePlayback,
   };
 }
 
@@ -125,6 +127,77 @@ export function saveWatchProgress(item: MediaItem, season?: number, episode?: nu
 
 export function getWatchProgress(mediaId: string) {
   return readEntries('continueWatching').find((entry) => entry.id === mediaId);
+}
+
+function playbackKey(season: number, episode: number) {
+  return `${season}:${episode}`;
+}
+
+function normalizedPlayback(currentTime: number, duration: number): PlaybackPosition | undefined {
+  if (!Number.isFinite(currentTime) || !Number.isFinite(duration) || currentTime < 0 || duration <= 0) return undefined;
+  return {
+    currentTime: Math.min(currentTime, duration),
+    duration,
+    updatedAt: Date.now(),
+  };
+}
+
+export function savePlaybackPosition(
+  item: MediaItem,
+  currentTime: number,
+  duration: number,
+  season?: number,
+  episode?: number,
+  totalEpisodes?: number,
+) {
+  const playback = normalizedPlayback(currentTime, duration);
+  if (!playback) return getWatchProgress(item.id);
+
+  const entries = readEntries('continueWatching');
+  const previous = entries.find((entry) => entry.id === item.id);
+  const isEpisode = season !== undefined && episode !== undefined;
+  const episodePlayback = { ...(previous?.episodePlayback || {}) };
+  if (isEpisode) episodePlayback[playbackKey(season, episode)] = playback;
+
+  const normalized: LibraryEntry = {
+    ...toLibraryEntry(item, previous),
+    season: isEpisode ? season : previous?.season,
+    episode: isEpisode ? episode : previous?.episode,
+    totalEpisodes: totalEpisodes ?? previous?.totalEpisodes,
+    playback: isEpisode ? previous?.playback : playback,
+    episodePlayback,
+  };
+  writeEntries('continueWatching', [normalized, ...entries.filter((entry) => entry.id !== item.id)]);
+  notifyLibraryChanged();
+  return normalized;
+}
+
+export function getPlaybackPosition(mediaId: string, season?: number, episode?: number) {
+  const entry = getWatchProgress(mediaId);
+  if (!entry) return undefined;
+  if (season !== undefined && episode !== undefined) {
+    return entry.episodePlayback?.[playbackKey(season, episode)];
+  }
+  return entry.playback;
+}
+
+export function getCardProgress(mediaId: string) {
+  const entry = getWatchProgress(mediaId);
+  if (!entry) return undefined;
+
+  if (entry.season !== undefined && entry.episode !== undefined) {
+    const episodePosition = entry.episodePlayback?.[playbackKey(entry.season, entry.episode)];
+    const episodeFraction = episodePosition?.duration
+      ? Math.min(1, Math.max(0, episodePosition.currentTime / episodePosition.duration))
+      : 0;
+    const total = Math.max(entry.totalEpisodes || entry.episode, 1);
+    return Math.min(100, Math.max(1, ((entry.episode - 1 + episodeFraction) / total) * 100));
+  }
+
+  if (entry.playback?.duration) {
+    return Math.min(100, Math.max(1, (entry.playback.currentTime / entry.playback.duration) * 100));
+  }
+  return 1;
 }
 
 export function toggleLibraryEntry(kind: LibraryKind, item: MediaItem) {
