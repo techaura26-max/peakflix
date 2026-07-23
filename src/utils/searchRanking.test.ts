@@ -24,4 +24,12 @@ describe('rankSearchSuggestions', () => {
     const duplicate = media({ id: 'movie-1', title: 'Dune', popularity: 100 });
     expect(rankSearchSuggestions([duplicate, duplicate], 'Dune')).toHaveLength(1);
   });
+
+  it('lets a highly popular sequel outrank an obscure exact-title result', () => {
+    const results = rankSearchSuggestions([
+      media({ id: 'movie-obscure', title: 'Dune', rating: 7.4, popularity: 2, voteCount: 15 }),
+      media({ id: 'movie-sequel', title: 'Dune: Part Two', rating: 8.1, popularity: 240, voteCount: 9500 }),
+    ], 'Dune');
+    expect(results[0].title).toBe('Dune: Part Two');
+  });
 });
