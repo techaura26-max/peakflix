@@ -1,4 +1,5 @@
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { useLayoutEffect } from 'react';
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { CategoryPage } from './pages/CategoryPage';
 import { DetailsPage } from './pages/DetailsPage';
@@ -9,6 +10,12 @@ import { LibraryPage } from './pages/LibraryPage';
 import { LegalPage } from './pages/LegalPage';
 
 export default function App() {
+  const location = useLocation();
+
+  useLayoutEffect(() => {
+    window.scrollTo(0, 0);
+  }, [location.key]);
+
   return (
     <Routes>
       <Route element={<Layout />}>
