@@ -19,8 +19,13 @@ import { Seo } from '../components/Seo';
 import { parsePlayerProgressMessage } from '../utils/playback';
 import { isRtlLanguage } from '../i18n/languages';
 
-export const STREAMING_SERVERS = ['VidSrcPM', 'VidSrc', 'SmashyStream', 'MultiEmbed'] as const;
+export const STREAMING_SERVERS = ['VidSrc', 'VidSrcPM', 'SmashyStream', 'MultiEmbed'] as const;
 type ServerName = typeof STREAMING_SERVERS[number];
+
+export function getStreamingServers(isAnime: boolean): readonly ServerName[] {
+  if (!isAnime) return STREAMING_SERVERS;
+  return ['SmashyStream', ...STREAMING_SERVERS.filter((server) => server !== 'SmashyStream')];
+}
 
 export function streamUrl(server: ServerName, tmdbId: number, isTv: boolean, season: number, episode: number) {
   const tvSuffix = `season=${season}&episode=${episode}`;
@@ -40,7 +45,7 @@ export function WatchPage() {
   const [seasons, setSeasons] = useState<MediaSeason[]>([]);
   const [episodes, setEpisodes] = useState<MediaEpisode[]>([]);
   const [recommendations, setRecommendations] = useState<MediaItem[]>([]);
-  const [activeServer, setActiveServer] = useState<ServerName>('VidSrcPM');
+  const [activeServer, setActiveServer] = useState<ServerName>('VidSrc');
   const savedProgress = useMemo(() => getWatchProgress(id), [id]);
   const [activeSeason, setActiveSeason] = useState(savedProgress?.season || 1);
   const [activeEpisode, setActiveEpisode] = useState(savedProgress?.episode || 1);
@@ -54,6 +59,8 @@ export function WatchPage() {
   const language = i18n.resolvedLanguage || localStorage.getItem('peakflix-language') || 'en';
   const rtl = isRtlLanguage(language);
   const isTv = item?.tmdbType === 'tv' || id.startsWith('tv-');
+  const isAnime = item?.type === 'anime';
+  const streamingServers = useMemo(() => getStreamingServers(isAnime), [isAnime]);
 
   useEffect(() => {
     let active = true;
@@ -101,6 +108,11 @@ export function WatchPage() {
     if (!item) return;
     saveWatchProgress(item, isTv ? activeSeason : undefined, isTv ? activeEpisode : undefined, isTv ? episodes.length : undefined);
   }, [activeEpisode, activeSeason, episodes.length, isTv, item]);
+
+  useEffect(() => {
+    if (!item) return;
+    setActiveServer(isAnime ? 'SmashyStream' : 'VidSrc');
+  }, [isAnime, item?.id]);
 
   useEffect(() => {
     if (!item) return;
@@ -174,7 +186,7 @@ export function WatchPage() {
 
       <div className="server-picker" aria-label={t('streamingServers')}>
         <span><Server size={16} />{t('chooseServer')}</span>
-        {STREAMING_SERVERS.map((server) => (
+        {streamingServers.map((server) => (
           <button key={server} className={server === activeServer ? 'is-active' : ''} onClick={() => setActiveServer(server)}>{server}</button>
         ))}
       </div>

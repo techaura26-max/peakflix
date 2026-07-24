@@ -37,9 +37,10 @@ export function Navbar() {
 
   const changeLanguage = async (language: LanguageCode) => {
     await ensureLanguage(language);
-    await i18n.changeLanguage(language);
     localStorage.setItem('peakflix-language', language);
     setLangOpen(false);
+    await i18n.changeLanguage(language);
+    window.location.reload();
   };
 
   return (

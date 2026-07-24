@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { STREAMING_SERVERS, streamUrl } from './WatchPage';
+import { getStreamingServers, STREAMING_SERVERS, streamUrl } from './WatchPage';
 
 describe('watch servers', () => {
-  it('uses VidSrcPM as the first server', () => {
-    expect(STREAMING_SERVERS[0]).toBe('VidSrcPM');
+  it('uses VidSrc as the first server by default', () => {
+    expect(STREAMING_SERVERS[0]).toBe('VidSrc');
+  });
+
+  it('uses SmashyStream as the first server for anime', () => {
+    expect(getStreamingServers(true)[0]).toBe('SmashyStream');
+    expect(getStreamingServers(false)[0]).toBe('VidSrc');
   });
 
   it('builds movie and episode URLs with TMDB identifiers', () => {
